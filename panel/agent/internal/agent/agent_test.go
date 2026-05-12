@@ -44,7 +44,10 @@ func TestCollectorDoesNotCrashWhenLQMissing(t *testing.T) {
 		t.Fatalf("expected lq unavailable capabilities: %+v", report.Capabilities)
 	}
 	if report.Capabilities.WriteActionsSupported || len(report.Capabilities.SupportedWriteActions) != 0 {
-		t.Fatalf("agent must not advertise write actions: %+v", report.Capabilities)
+		t.Fatalf("agent must not advertise write actions by default: %+v", report.Capabilities)
+	}
+	if report.Capabilities.ControllerMetadataActionsSupported {
+		t.Fatalf("agent must not participate in Controller metadata actions: %+v", report.Capabilities)
 	}
 	if report.NodeID != "node-a" {
 		t.Fatalf("node id not preserved: %q", report.NodeID)
@@ -63,6 +66,38 @@ func TestConfigParser(t *testing.T) {
 	}
 	if cfg.ControllerURL != "http://127.0.0.1:18080" || cfg.Role != "relay" || cfg.IntervalSeconds != 5 || !cfg.EnableTasks || cfg.TaskIntervalSeconds != 3 || cfg.TaskTimeoutSeconds != 4 || cfg.MaxConcurrentTasks != 1 || cfg.TaskResultLimitKB != 12 {
 		t.Fatalf("unexpected config: %+v", cfg)
+	}
+}
+
+func TestLoadConfigWritesStableNodeIDState(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "agent.yml")
+	nodeIDPath := filepath.Join(dir, "node_id")
+	t.Setenv("LEIKWAN_AGENT_NODE_ID_FILE", nodeIDPath)
+	content := "controller_url: http://127.0.0.1:18080\nnode_name: Demo Node\nrole: relay\ntoken: secret\nenable_tasks: true\n"
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := LoadConfig(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.NodeID == "" {
+		t.Fatalf("expected generated stable node_id")
+	}
+	raw, err := os.ReadFile(nodeIDPath)
+	if err != nil {
+		t.Fatalf("expected node_id state file: %v", err)
+	}
+	if strings.TrimSpace(string(raw)) != cfg.NodeID {
+		t.Fatalf("state node_id mismatch: %q vs %q", string(raw), cfg.NodeID)
+	}
+	cfg2, err := LoadConfig(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg2.NodeID != cfg.NodeID {
+		t.Fatalf("node_id should be stable: %q vs %q", cfg.NodeID, cfg2.NodeID)
 	}
 }
 
@@ -164,11 +199,162 @@ func TestCollectorParsesStatusAndDoctorJSON(t *testing.T) {
 		t.Fatalf("manual snapshot/rollback record capabilities should be advertised: %+v", report.Capabilities)
 	}
 	if report.Capabilities.WriteActionsSupported || len(report.Capabilities.SupportedWriteActions) != 0 {
-		t.Fatalf("write actions must remain unsupported: %+v", report.Capabilities)
+		t.Fatalf("write actions must remain unsupported unless enable_write_actions=true: %+v", report.Capabilities)
+	}
+	if report.Capabilities.ControllerMetadataActionsSupported {
+		t.Fatalf("Controller metadata actions are Controller-only and must not be agent capabilities: %+v", report.Capabilities)
 	}
 	var doc map[string]any
 	if err := json.Unmarshal(report.Doctor, &doc); err != nil || doc["overall"] != "OK" {
 		t.Fatalf("doctor not parsed: %s err=%v", report.Doctor, err)
+	}
+}
+
+func TestAlphaWriteActionsAreExplicitAndStageFilesOnly(t *testing.T) {
+	cfg := Config{EnableWriteActions: true, TaskTimeoutSeconds: 5, TaskResultLimitKB: 64}
+	supported := SupportedWriteActions(cfg)
+	for _, want := range []string{"configure_node_role", "apply_network_profile", "apply_entry_config", "apply_forward_config", "reload_leikwan_core", "verify_applied_config"} {
+		found := false
+		for _, got := range supported {
+			if got == want {
+				found = true
+			}
+			for _, forbidden := range []string{"shell -c", "bash -c", "eval", "nft", "iptables", "rm"} {
+				if strings.Contains(got, forbidden) {
+					t.Fatalf("supported action leaked forbidden token %q: %s", forbidden, got)
+				}
+			}
+		}
+		if !found {
+			t.Fatalf("missing supported write action %s in %+v", want, supported)
+		}
+	}
+	if len(SupportedWriteActions(Config{})) != 0 {
+		t.Fatalf("write actions must be hidden when disabled")
+	}
+	etcDir := t.TempDir()
+	stateDir := t.TempDir()
+	backupDir := t.TempDir()
+	t.Setenv("LEIKWAN_AGENT_ETC_DIR", etcDir)
+	t.Setenv("LEIKWAN_AGENT_STATE_DIR", stateDir)
+	t.Setenv("LEIKWAN_AGENT_BACKUP_DIR", backupDir)
+	payload := json.RawMessage(`{"network_name":"demo","network_secret":"secret-token","custom_cmd":"cmd --token abc"}`)
+	disabled := ExecuteTask(context.Background(), Collector{}, Config{EnableWriteActions: false}, Task{Action: "apply_network_profile", PayloadJSON: payload})
+	if disabled.Status != "rejected" {
+		t.Fatalf("disabled write action should reject: %+v", disabled)
+	}
+	commandPayload := ExecuteTask(context.Background(), Collector{}, cfg, Task{Action: "apply_network_profile", PayloadJSON: json.RawMessage(`{"command":"rm -rf /"}`)})
+	if commandPayload.Status != "rejected" || !strings.Contains(commandPayload.Error, "command") {
+		t.Fatalf("command payload should reject: %+v", commandPayload)
+	}
+	result := ExecuteTask(context.Background(), Collector{}, cfg, Task{Action: "apply_network_profile", PayloadJSON: payload})
+	if result.Status != "succeeded" || strings.Contains(result.ResultStdout, "secret-token") || strings.Contains(result.ResultStdout, "--token abc") {
+		t.Fatalf("apply network should succeed and redact result: %+v", result)
+	}
+	written, err := os.ReadFile(filepath.Join(etcDir, "panel-network.json"))
+	if err != nil {
+		t.Fatalf("expected panel-network.json: %v", err)
+	}
+	if strings.Contains(string(written), "secret-token") || strings.Contains(string(written), "--token abc") {
+		t.Fatalf("staged file leaked secret: %s", string(written))
+	}
+	forward := ExecuteTask(context.Background(), Collector{}, cfg, Task{Action: "apply_forward_config", PayloadJSON: json.RawMessage(`{"target_host":"10.0.0.8","target_port":443}`)})
+	if forward.Status != "succeeded" {
+		t.Fatalf("apply forward failed: %+v", forward)
+	}
+	if _, err := os.Stat(filepath.Join(etcDir, "panel-forward.json")); err != nil {
+		t.Fatalf("expected panel-forward.json: %v", err)
+	}
+	verify := ExecuteTask(context.Background(), Collector{}, cfg, Task{Action: "verify_applied_config"})
+	if verify.Status != "succeeded" || !strings.Contains(verify.ResultStdout, "panel-forward.json") {
+		t.Fatalf("verify should find staged files: %+v", verify)
+	}
+	if _, err := safePath(etcDir, "../evil"); err == nil {
+		t.Fatalf("safePath should reject traversal")
+	}
+}
+
+func TestAlphaWriteCapabilitiesWhenEnabled(t *testing.T) {
+	c := Collector{
+		LQPath: filepath.Join(t.TempDir(), "missing-lq"),
+		PublicIPFunc: func(context.Context) (string, error) {
+			return "203.0.113.10", nil
+		},
+	}
+	report := c.Collect(context.Background(), Config{NodeID: "node-a", NodeName: "A", Role: "relay", EnableWriteActions: true})
+	if !report.Capabilities.WriteActionsSupported || len(report.Capabilities.SupportedWriteActions) == 0 {
+		t.Fatalf("write-enabled agent should advertise alpha write actions: %+v", report.Capabilities)
+	}
+}
+
+func TestPanel3RealActionsUseAllowedPathsAndFixedArgv(t *testing.T) {
+	configDir := t.TempDir()
+	systemdDir := t.TempDir()
+	backupDir := t.TempDir()
+	t.Setenv("LEIKWAN_AGENT_CONFIG_DIR", configDir)
+	t.Setenv("LEIKWAN_AGENT_SYSTEMD_DIR", systemdDir)
+	t.Setenv("LEIKWAN_AGENT_BACKUP_DIR", backupDir)
+	cfg := Config{EnableWriteActions: true, TaskTimeoutSeconds: 5, TaskResultLimitKB: 4}
+	commands := []string{}
+	c := Collector{TaskCommandFunc: func(_ context.Context, name string, args ...string) (string, string, int, error) {
+		commands = append(commands, name+" "+strings.Join(args, " "))
+		return "ok", "", 0, nil
+	}}
+	easy := ExecuteTask(context.Background(), c, cfg, Task{Action: "configure_easytier_network", PayloadJSON: json.RawMessage(`{"network_name":"demo","network_secret":"super-secret","role":"relay"}`)})
+	if easy.Status != "succeeded" {
+		t.Fatalf("configure easytier failed: %+v", easy)
+	}
+	if _, err := os.Stat(filepath.Join(configDir, "easytier", "config.json")); err != nil {
+		t.Fatalf("expected easytier config: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(systemdDir, "leikwan-easytier.service")); err != nil {
+		t.Fatalf("expected easytier service: %v", err)
+	}
+	entry := ExecuteTask(context.Background(), c, cfg, Task{Action: "apply_entry_ports", PayloadJSON: json.RawMessage(`{"entry":{"listen_port_start":10000,"listen_port_end":10002,"protocols":"both","listen_host":"0.0.0.0"}}`)})
+	if entry.Status != "succeeded" {
+		t.Fatalf("apply entry ports failed: %+v", entry)
+	}
+	forward := ExecuteTask(context.Background(), c, cfg, Task{Action: "apply_forward_rules", PayloadJSON: json.RawMessage(`{"forward":{"listen_port":10001,"target_host":"10.0.0.8","target_port":443,"protocol":"tcp"}}`)})
+	if forward.Status != "succeeded" {
+		t.Fatalf("apply forward rules failed: %+v", forward)
+	}
+	if _, err := os.Stat(filepath.Join(configDir, "nftables", "leikwan-panel.nft")); err != nil {
+		t.Fatalf("expected nft config: %v", err)
+	}
+	reload := ExecuteTask(context.Background(), c, cfg, Task{Action: "reload_firewall_rules"})
+	if reload.Status != "succeeded" {
+		t.Fatalf("reload firewall should use fixed argv: %+v commands=%v", reload, commands)
+	}
+	pbr := ExecuteTask(context.Background(), c, cfg, Task{Action: "apply_pbr_rules", PayloadJSON: json.RawMessage(`{"source_cidr":"10.0.0.0/24","target_cidr":"0.0.0.0/0","output_interface":"eth0","gateway":"192.0.2.1","table_id":100,"priority":1000}`)})
+	if pbr.Status != "succeeded" {
+		t.Fatalf("apply pbr failed: %+v", pbr)
+	}
+	ddns := ExecuteTask(context.Background(), c, cfg, Task{Action: "apply_ddns_config", PayloadJSON: json.RawMessage(`{"provider":"manual","domain":"home.example.com","api_token":"secret-token"}`)})
+	if ddns.Status != "succeeded" || strings.Contains(ddns.ResultStdout, "secret-token") {
+		t.Fatalf("apply ddns failed or leaked token: %+v", ddns)
+	}
+	restartAgent := ExecuteTask(context.Background(), c, cfg, Task{Action: "restart_agent"})
+	if restartAgent.Status != "succeeded" {
+		t.Fatalf("restart agent fixed action failed: %+v", restartAgent)
+	}
+	rebootRejected := ExecuteTask(context.Background(), c, cfg, Task{Action: "reboot_node", PayloadJSON: json.RawMessage(`{"confirm":"NO"}`)})
+	if rebootRejected.Status != "failed" {
+		t.Fatalf("reboot must require confirm: %+v", rebootRejected)
+	}
+	reboot := ExecuteTask(context.Background(), c, cfg, Task{Action: "reboot_node", PayloadJSON: json.RawMessage(`{"confirm":"REBOOT"}`)})
+	if reboot.Status != "succeeded" {
+		t.Fatalf("reboot fixed action failed: %+v", reboot)
+	}
+	joined := strings.Join(commands, "\n")
+	for _, forbidden := range []string{"shell -c", "bash -c", "eval"} {
+		if strings.Contains(joined, forbidden) {
+			t.Fatalf("forbidden execution path appeared: %s", joined)
+		}
+	}
+	for _, expected := range []string{"systemctl restart leikwan-agent", "nft -f", "ip rule add", "ip route replace", "reboot"} {
+		if !strings.Contains(joined, expected) {
+			t.Fatalf("expected fixed argv %q in commands: %s", expected, joined)
+		}
 	}
 }
 

@@ -9,6 +9,7 @@ import (
 var (
 	bearerRe       = regexp.MustCompile(`(?i)Bearer\s+[A-Za-z0-9._~+/=-]+`)
 	querySecretRe  = regexp.MustCompile(`(?i)(token|secret|password|key)=([^&\s]+)`)
+	flagSecretRe   = regexp.MustCompile(`(?i)(--(?:token|operator-token|controller-token|secret|password|key|private-key|network-secret|custom-url|custom-cmd)\s+)[^\s]+`)
 	assignSecretRe = regexp.MustCompile(`(?i)(token|operator_token|controller_token|secret|password|private_key|privateKey|network_secret|custom_url|custom_cmd)\s*[:=]\s*[^,\s]+`)
 )
 
@@ -24,6 +25,7 @@ func sensitiveKey(key string) bool {
 func RedactString(s string) string {
 	s = bearerRe.ReplaceAllString(s, "Bearer REDACTED")
 	s = querySecretRe.ReplaceAllString(s, "$1=REDACTED")
+	s = flagSecretRe.ReplaceAllString(s, "$1REDACTED")
 	s = assignSecretRe.ReplaceAllStringFunc(s, func(match string) string {
 		if idx := strings.IndexAny(match, ":="); idx >= 0 {
 			return strings.TrimSpace(match[:idx]) + string(match[idx]) + "REDACTED"

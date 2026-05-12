@@ -1,16 +1,16 @@
 # Leikwan Panel systemd 示例
 
-��ҳ�ṩ Leikwan Panel 2.1.0 �� systemd �ݰ���2.1.0 �����Զ�ִ�����ñ���������޸�?Leikwan Core �� nftables��systemd��EasyTier��DDNS �� TSV ���á�
+��ҳ�ṩ Leikwan Panel 3.0.0-alpha.1 �� systemd �ݰ���3.0.0-alpha.1 �����Զ�ִ�����ñ���������޸�?Leikwan Core �� nftables��systemd��EasyTier��DDNS �� TSV ���á�
 ## Controller 配置路径
 
-建议路径�?
+建议路径�?
 ```text
 /usr/local/bin/leikwan-controller
 /var/lib/leikwan-panel/controller.db
 /etc/leikwan-panel/controller.yml
 ```
 
-`controller.yml` 示例�?
+`controller.yml` 示例�?
 ```yaml
 token: change-me
 ```
@@ -29,7 +29,7 @@ LEIKWAN_CONTROLLER_TOKEN=change-me
 panel/examples/leikwan-controller.service
 ```
 
-内容�?
+内容�?
 ```ini
 [Unit]
 Description=Leikwan Panel Controller
@@ -50,7 +50,7 @@ WantedBy=multi-user.target
 
 ## Agent 配置路径
 
-建议路径�?
+建议路径�?
 ```text
 /usr/local/bin/leikwan-agent
 /etc/leikwan-agent/config.yml
@@ -70,7 +70,7 @@ panel/examples/agent.yml
 panel/examples/leikwan-agent.service
 ```
 
-内容�?
+内容�?
 ```ini
 [Unit]
 Description=Leikwan Panel Agent
@@ -103,8 +103,8 @@ journalctl -u leikwan-controller.service -n 100 --no-pager
 journalctl -u leikwan-agent.service -n 100 --no-pager
 ```
 
-日志中不应出�?token、secret、password、privateKey、custom_url、custom_cmd �?Authorization 明文�?
-## 2.1.0 Operator Token Example
+日志中不应出�?token、secret、password、privateKey、custom_url、custom_cmd �?Authorization 明文�?
+## 3.0.0-alpha.1 Operator Token Example
 
 `/etc/leikwan-panel/controller.env` can contain both tokens:
 

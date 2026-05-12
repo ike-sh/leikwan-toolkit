@@ -1,6 +1,6 @@
 # Task Lifecycle
 
-Leikwan Panel `2.1.0` supports readonly tasks only.
+Leikwan Panel `3.0.0-alpha.1` supports readonly tasks only.
 
 ## Status
 
@@ -36,9 +36,9 @@ Agent redacts stdout, stderr, and errors before upload. Controller redacts again
 
 Secrets covered by redaction include token, secret, password, privateKey, network_secret, custom_url, custom_cmd, and Authorization.
 
-## 2.1.0 Snapshot / Rollback Safety Framework
+## 3.0.0-alpha.1 Snapshot / Rollback Safety Framework
 
-Leikwan Panel 2.1.0 adds Plan fields for manual snapshot and rollback metadata plus Safety Gate and verification APIs. The Controller only records operator-provided references and notes. It does not create snapshots, roll back nodes, restart services, or modify Core configuration.
+Leikwan Panel 3.0.0-alpha.1 adds Plan fields for manual snapshot and rollback metadata plus Safety Gate and verification APIs. The Controller only records operator-provided references and notes. It does not create snapshots, roll back nodes, restart services, or modify Core configuration.
 
 New Plan APIs:
 

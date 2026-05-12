@@ -183,7 +183,9 @@ h3 {
 .tag.recorded,
 .tag.verified,
 .tag.ready,
-.tag.low {
+.tag.low,
+.tag.metadata_write,
+.tag.alpha_write {
   background: #daf3e9;
   color: #126346;
 }
@@ -316,6 +318,9 @@ h3 {
 
 .topology-page,
 .bootstrap-page,
+.network-page,
+.entries-page,
+.forwards-page,
 .plans-page,
 .tasks-page,
 .capabilities-page,
@@ -412,10 +417,22 @@ button:disabled {
   font-weight: 700;
 }
 
+.form-grid .check-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.form-grid .check-label input {
+  width: auto;
+}
+
 .form-grid input,
 .form-grid select,
 .mini-form input,
-.mini-form textarea {
+.mini-form select,
+.mini-form textarea,
+.metadata-actions textarea {
   width: 100%;
   border: 1px solid #ccd6df;
   border-radius: 8px;
@@ -456,6 +473,18 @@ button:disabled {
   padding: 14px;
   background: #111820;
   color: #e9f3ef;
+  white-space: pre-wrap;
+}
+
+.inline-pre {
+  max-width: 360px;
+  max-height: 180px;
+  overflow: auto;
+  margin: 0;
+  border-radius: 8px;
+  padding: 10px;
+  color: #e9f3ef;
+  background: #111820;
   white-space: pre-wrap;
 }
 

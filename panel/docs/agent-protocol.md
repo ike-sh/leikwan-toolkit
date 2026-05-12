@@ -1,8 +1,8 @@
 # Leikwan Agent Protocol
 
-Current protocol version: `2.1.0`.
+Current protocol version: `3.0.0-alpha.1`.
 
-Agent reports local read-only state to Controller. In `2.1.0`, Agent can optionally pull built-in readonly tasks, but it still cannot receive arbitrary command strings and cannot perform writes.
+Agent reports local state to Controller. In `3.0.0-alpha.1`, Agent can optionally pull built-in readonly tasks and fixed alpha write tasks when `enable_write_actions=true`. It still cannot receive arbitrary command strings.
 
 ## Authorization
 
@@ -68,7 +68,7 @@ Content-Type: application/json
   "public_ip": "203.0.113.10",
   "primary_lan_ip": "10.0.0.10",
   "easytier_ip": "10.198.1.1",
-  "agent_version": "2.1.0",
+  "agent_version": "3.0.0-alpha.1",
   "core_version": "1.4.0 LTS",
   "status": "online",
   "health_score": 96,
@@ -224,9 +224,9 @@ The protocol does not include:
 - DDNS configuration updates
 - entries / forwards / PBR modification
 
-## 2.1.0 Snapshot / Rollback Safety Framework
+## 3.0.0-alpha.1 Snapshot / Rollback Safety Framework
 
-Leikwan Panel 2.1.0 adds Plan fields for manual snapshot and rollback metadata plus Safety Gate and verification APIs. The Controller only records operator-provided references and notes. It does not create snapshots, roll back nodes, restart services, or modify Core configuration.
+Leikwan Panel 3.0.0-alpha.1 adds Plan fields for manual snapshot and rollback metadata plus Safety Gate and verification APIs. The Controller only records operator-provided references and notes. It does not create snapshots, roll back nodes, restart services, or modify Core configuration.
 
 New Plan APIs:
 
@@ -239,11 +239,15 @@ POST /api/v1/plans/:id/verify
 
 See `snapshot-rollback-beta.md` and `safety-gate.md`.
 
-## 2.1.0 Write Action Review
+## 3.0.0-alpha.1 Write Action Review
 
-The Agent protocol still has no write task channel. Agents report `write_actions_supported=false` and an empty `supported_write_actions` list.
+The Agent protocol still does not accept Controller-provided command strings. By default, Agents report `write_actions_supported=false` and an empty `supported_write_actions` list. If an operator explicitly installs an Agent with `enable_write_actions=true`, it may report fixed alpha actions for EasyTier, nftables, PBR, DDNS and node lifecycle operations.
 
 Controller Action Review is separate from Agent tasks. It does not send action-review results to Agents and does not create write tasks.
 ## Agent Token and Operator Token
 
 Agent APIs use the Agent token from `LEIKWAN_CONTROLLER_TOKEN`. They do not accept `LEIKWAN_OPERATOR_TOKEN`. Operator APIs use the Operator token and do not accept the Agent token. See `operator-auth.md`.
+
+## Controller-only Metadata Actions
+
+3.0.0-alpha.1 adds metadata-only Plan actions. They are not Agent protocol messages: the Agent does not pull them, execute them, or report results for them. Agent capabilities should continue to report `controller_metadata_actions_supported=false`; metadata actions stay Controller-only even when demo alpha write actions are enabled.

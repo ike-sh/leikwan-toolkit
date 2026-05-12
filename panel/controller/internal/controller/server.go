@@ -2,6 +2,7 @@ package controller
 
 import (
 	"crypto/sha256"
+	"database/sql"
 	"encoding/hex"
 	"encoding/json"
 	"io"
@@ -30,12 +31,20 @@ func NewServerWithAuth(store *Store, opts ServerOptions, logger *log.Logger) htt
 	s := &Server{store: store, agentToken: opts.AgentToken, operatorToken: opts.OperatorToken, strictAuth: opts.StrictAuth, log: logger}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/v1/health", s.handleHealth)
+	mux.HandleFunc("/api/v1/login", s.handleLogin)
+	mux.HandleFunc("/api/v1/logout", s.handleLogout)
+	mux.HandleFunc("/api/v1/me", s.handleMe)
 	mux.HandleFunc("/api/v1/auth/status", s.handleAuthStatus)
 	mux.HandleFunc("/api/v1/capabilities", s.handleCapabilities)
 	mux.HandleFunc("/api/v1/action-catalog", s.handleActionCatalog)
 	mux.HandleFunc("/api/v1/action-catalog/", s.handleActionCatalog)
+	mux.HandleFunc("/api/v1/bootstrap/controller-info", s.handleBootstrapControllerInfo)
+	mux.HandleFunc("/api/v1/bootstrap/agent-install-command", s.handleBootstrapAgentInstallCommand)
+	mux.HandleFunc("/api/v1/bootstrap/agent-token", s.handleBootstrapAgentToken)
 	mux.HandleFunc("/api/v1/bootstrap/agent-command", s.handleBootstrapAgentCommand)
 	mux.HandleFunc("/api/v1/topology", s.handleTopology)
+	mux.HandleFunc("/api/v1/network-profiles", s.handleNetworkProfiles)
+	mux.HandleFunc("/api/v1/network-profiles/", s.handleNetworkProfileByID)
 	mux.HandleFunc("/api/v1/plans", s.handlePlans)
 	mux.HandleFunc("/api/v1/plans/", s.handlePlanByID)
 	mux.HandleFunc("/api/v1/tasks", s.handleTasks)
@@ -47,7 +56,13 @@ func NewServerWithAuth(store *Store, opts ServerOptions, logger *log.Logger) htt
 	mux.HandleFunc("/api/v1/nodes", s.handleNodes)
 	mux.HandleFunc("/api/v1/nodes/", s.handleNodeByID)
 	mux.HandleFunc("/api/v1/entries", s.handleEntries)
+	mux.HandleFunc("/api/v1/entries/", s.handleEntryByID)
 	mux.HandleFunc("/api/v1/forwards", s.handleForwards)
+	mux.HandleFunc("/api/v1/forwards/", s.handleForwardByID)
+	mux.HandleFunc("/api/v1/pbr-policies", s.handlePBRPolicies)
+	mux.HandleFunc("/api/v1/pbr-policies/", s.handlePBRPolicyByID)
+	mux.HandleFunc("/api/v1/ddns-profiles", s.handleDDNSProfiles)
+	mux.HandleFunc("/api/v1/ddns-profiles/", s.handleDDNSProfileByID)
 	mux.HandleFunc("/api/v1/events", s.handleEvents)
 	return withCORS(s.withReadAuth(mux))
 }
@@ -56,7 +71,7 @@ func withCORS(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
 		w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type")
-		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, OPTIONS")
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusNoContent)
 			return
@@ -85,6 +100,14 @@ func (s *Server) requirePOST(w http.ResponseWriter, r *http.Request) bool {
 
 func (s *Server) requireGET(w http.ResponseWriter, r *http.Request) bool {
 	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return false
+	}
+	return true
+}
+
+func (s *Server) requirePUT(w http.ResponseWriter, r *http.Request) bool {
+	if r.Method != http.MethodPut {
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return false
 	}
@@ -126,7 +149,7 @@ func (s *Server) requireOperatorAuth(w http.ResponseWriter, r *http.Request) boo
 
 func (s *Server) withReadAuth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !s.strictAuth || r.Method == http.MethodOptions || r.URL.Path == "/api/v1/health" || strings.HasPrefix(r.URL.Path, "/api/v1/agent/") {
+		if !s.strictAuth || r.Method == http.MethodOptions || r.URL.Path == "/api/v1/health" || r.URL.Path == "/api/v1/login" || r.URL.Path == "/api/v1/logout" || r.URL.Path == "/api/v1/me" || strings.HasPrefix(r.URL.Path, "/api/v1/agent/") || r.URL.Path == "/api/v1/bootstrap/controller-info" || r.URL.Path == "/api/v1/bootstrap/agent-install-command" {
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -138,7 +161,10 @@ func (s *Server) withReadAuth(next http.Handler) http.Handler {
 }
 
 func (s *Server) operatorIdentity(r *http.Request) string {
-	token := bearerToken(r)
+	return s.operatorIdentityFromToken(bearerToken(r))
+}
+
+func (s *Server) operatorIdentityFromToken(token string) string {
 	if token == "" {
 		return "operator"
 	}
@@ -165,6 +191,45 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, HealthResponse{Name: "leikwan-controller", Version: Version, Status: "ok"})
+}
+
+func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
+	if !s.requirePOST(w, r) {
+		return
+	}
+	var req LoginRequest
+	if _, ok := s.decodeBody(w, r, &req); !ok {
+		return
+	}
+	if s.operatorToken == "" {
+		writeError(w, http.StatusForbidden, "operator token required")
+		return
+	}
+	if strings.TrimSpace(req.Token) != s.operatorToken {
+		writeError(w, http.StatusUnauthorized, "operator unauthorized")
+		return
+	}
+	writeJSON(w, http.StatusOK, LoginResponse{Status: "ok", Identity: s.operatorIdentityFromToken(req.Token), Version: Version, StrictAuth: s.strictAuth, AgentAuth: s.agentToken != "", OperatorSet: s.operatorToken != ""})
+}
+
+func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
+	if !s.requirePOST(w, r) {
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
+	if !s.requireGET(w, r) {
+		return
+	}
+	token := bearerToken(r)
+	ok := s.operatorToken != "" && token == s.operatorToken
+	identity := ""
+	if ok {
+		identity = s.operatorIdentityFromToken(token)
+	}
+	writeJSON(w, http.StatusOK, MeResponse{Authenticated: ok, Identity: identity, Version: Version})
 }
 
 func (s *Server) handleAuthStatus(w http.ResponseWriter, r *http.Request) {
@@ -194,7 +259,8 @@ func (s *Server) handleCapabilities(w http.ResponseWriter, r *http.Request) {
 			{Command: "lq forward list", Class: "readonly", Note: "Forward inventory"},
 			{Command: "lq ddns overview", Class: "readonly", Note: "DDNS overview"},
 			{Command: "manual TODO steps", Class: "manual", Note: "Operator performs interactive Core menu work"},
-			{Command: "readonly allowlisted tasks", Class: "readonly", Note: "2.1.0 Agent tasks map actions to fixed argv only"},
+			{Command: "readonly allowlisted tasks", Class: "readonly", Note: "3.0.0-alpha.1 Agent tasks map actions to fixed argv only"},
+			{Command: "alpha demo write actions", Class: "manual", Note: "Only fixed Agent handlers can stage Panel-managed JSON when enable_write_actions=true"},
 			{Command: "manual snapshot record", Class: "manual", Note: "Controller records operator-provided snapshot metadata only"},
 			{Command: "manual rollback record", Class: "manual", Note: "Controller records rollback metadata and instructions only"},
 			{Command: "future write tasks", Class: "future", Note: "Reserved for later dry-run, snapshot, rollback, and approval design"},
@@ -202,7 +268,7 @@ func (s *Server) handleCapabilities(w http.ResponseWriter, r *http.Request) {
 		Blocked:            []string{"rm", "systemctl restart", "systemctl stop", "nft", "iptables", "ip route", "curl | bash", "bash -c", "eval", "write into /etc"},
 		Future:             []string{"write allowlist", "dry-run", "snapshot", "rollback", "operator approval"},
 		SafetyLevels:       []string{"safe", "caution", "dangerous"},
-		TaskSupport:        "2.1.0 supports readonly allowlisted tasks, Plan dry-runs, manual snapshot/rollback metadata, write action review, and Operator Auth only; approval is audit-only and Agents default enable_tasks=false",
+		TaskSupport:        "3.0.0-alpha.1 supports readonly tasks and demo alpha write actions gated by enable_write_actions=true; no command strings are accepted",
 		AllowedTaskActions: allowedTaskActions(),
 	})
 }
@@ -228,28 +294,146 @@ func (s *Server) handleBootstrapAgentCommand(w http.ResponseWriter, r *http.Requ
 	if !s.requireGET(w, r) {
 		return
 	}
+	s.writeBootstrapAgentCommand(w, r, false)
+}
+
+func (s *Server) handleBootstrapControllerInfo(w http.ResponseWriter, r *http.Request) {
+	if !s.requireGET(w, r) {
+		return
+	}
+	controllerURL := controllerURLFromRequest(r)
+	writeJSON(w, http.StatusOK, ControllerInfoResponse{
+		Version:                 Version,
+		ControllerURL:           RedactString(controllerURL),
+		ControllerURLGuess:      RedactString(controllerURL),
+		OperatorAuthConfigured:  s.operatorToken != "",
+		AgentAuthConfigured:     s.agentToken != "",
+		StrictAuth:              s.strictAuth,
+		DemoApply:               true,
+		InstallScriptURL:        installScriptURL(),
+		SupportedRoles:          []string{"entry", "relay", "mixed", "unknown"},
+		SupportedInstallMethods: []string{"curl", "wget"},
+		Note:                    "3.0.0-alpha.1 demo apply can stage Panel-managed config files on write-enabled Agent nodes; backend targets are target_host:target_port and do not need an Agent.",
+	})
+}
+
+func (s *Server) handleBootstrapAgentInstallCommand(w http.ResponseWriter, r *http.Request) {
+	if !s.requireGET(w, r) {
+		return
+	}
+	tokenMode := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("token_mode")))
+	full := tokenMode == "full"
+	if full && !s.requireOperatorAuth(w, r) {
+		return
+	}
+	s.writeBootstrapAgentCommand(w, r, full)
+}
+
+func (s *Server) handleBootstrapAgentToken(w http.ResponseWriter, r *http.Request) {
+	if !s.requirePOST(w, r) || !s.requireOperatorAuth(w, r) {
+		return
+	}
+	writeJSON(w, http.StatusOK, AgentTokenResponse{
+		Token:     RedactString(s.agentToken),
+		TokenMode: "controller-agent-token",
+		Warnings:  []string{"3.0.0-alpha.1 reuses the Controller Agent token; one-time join tokens are planned for a later release."},
+	})
+}
+
+func (s *Server) writeBootstrapAgentCommand(w http.ResponseWriter, r *http.Request, full bool) {
 	controllerURL := strings.TrimSpace(r.URL.Query().Get("controller_url"))
 	if controllerURL == "" {
-		scheme := "http"
-		if r.TLS != nil {
-			scheme = "https"
-		}
-		controllerURL = scheme + "://" + r.Host
+		controllerURL = controllerURLFromRequest(r)
 	}
 	role := normalizeRole(strings.TrimSpace(r.URL.Query().Get("role")))
 	nodeName := strings.TrimSpace(r.URL.Query().Get("node_name"))
 	if nodeName == "" {
 		nodeName = "leikwan-node"
 	}
-	command := "sudo bash panel/scripts/install-agent.sh --controller '" + shellQuote(controllerURL) + "' --token 'REDACTED' --name '" + shellQuote(nodeName) + "' --role '" + shellQuote(role) + "'"
+	enableTasks := parseBoolQuery(r.URL.Query().Get("enable_tasks"), true)
+	enableWriteActions := parseBoolQuery(r.URL.Query().Get("enable_write_actions"), false)
+	method := normalizeInstallMethod(r.URL.Query().Get("method"))
+	scriptURL := installScriptURL()
+	token := "REDACTED"
+	if full && s.agentToken != "" {
+		token = s.agentToken
+	}
+	masked := buildAgentInstallCommand(method, scriptURL, controllerURL, "REDACTED", nodeName, role, enableTasks, enableWriteActions)
+	command := masked
+	fullCommand := ""
+	if full {
+		fullCommand = buildAgentInstallCommand(method, scriptURL, controllerURL, token, nodeName, role, enableTasks, enableWriteActions)
+		command = fullCommand
+	}
 	writeJSON(w, http.StatusOK, BootstrapAgentCommandResponse{
-		Command:       command,
-		ControllerURL: RedactString(controllerURL),
-		Role:          role,
-		NodeName:      RedactString(nodeName),
-		Token:         "REDACTED",
-		Note:          "Token is intentionally redacted. Replace REDACTED on the target host or write /etc/leikwan-agent/config.yml securely.",
+		Command:            command,
+		MaskedCommand:      masked,
+		FullCommand:        fullCommand,
+		ControllerURL:      RedactString(controllerURL),
+		InstallScriptURL:   scriptURL,
+		InstallMethod:      method,
+		Role:               role,
+		NodeName:           RedactString(nodeName),
+		Token:              "REDACTED",
+		Note:               "Agent joins by calling Controller; Controller does not SSH to nodes. enable_write_actions is alpha/demo and stages Panel-managed config files only.",
+		EnableTasks:        enableTasks,
+		EnableWriteActions: enableWriteActions,
+		Warnings:           []string{"Run the command on the target VPS as root or with sudo.", "Controller downtime does not stop existing forwarding.", "Backend/landing targets do not need an Agent."},
 	})
+}
+
+func controllerURLFromRequest(r *http.Request) string {
+	scheme := "http"
+	if r.TLS != nil {
+		scheme = "https"
+	}
+	return scheme + "://" + r.Host
+}
+
+func parseBoolQuery(value string, fallback bool) bool {
+	if strings.TrimSpace(value) == "" {
+		return fallback
+	}
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "1", "true", "yes", "y", "on", "enabled":
+		return true
+	default:
+		return false
+	}
+}
+
+func normalizeInstallMethod(method string) string {
+	switch strings.ToLower(strings.TrimSpace(method)) {
+	case "wget":
+		return "wget"
+	default:
+		return "curl"
+	}
+}
+
+func installScriptURL() string {
+	return "https://raw.githubusercontent.com/ike-sh/leikwan-toolkit/main/panel/scripts/install-agent.sh"
+}
+
+func buildAgentInstallCommand(method, scriptURL, controllerURL, token, nodeName, role string, enableTasks, enableWriteActions bool) string {
+	launcher := "curl -fsSL '" + shellQuote(scriptURL) + "' | sudo bash -s --"
+	if normalizeInstallMethod(method) == "wget" {
+		launcher = "wget -qO- '" + shellQuote(scriptURL) + "' | sudo bash -s --"
+	}
+	parts := []string{
+		launcher,
+		"--controller-url '" + shellQuote(controllerURL) + "'",
+		"--token '" + shellQuote(token) + "'",
+		"--node-name '" + shellQuote(nodeName) + "'",
+		"--role '" + shellQuote(role) + "'",
+	}
+	if enableTasks {
+		parts = append(parts, "--enable-tasks")
+	}
+	if enableWriteActions {
+		parts = append(parts, "--enable-write-actions")
+	}
+	return strings.Join(parts, " \\\n  ")
 }
 
 func shellQuote(s string) string {
@@ -397,9 +581,6 @@ func (s *Server) handleNodes(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleNodeByID(w http.ResponseWriter, r *http.Request) {
-	if !s.requireGET(w, r) {
-		return
-	}
 	rest := strings.TrimPrefix(r.URL.Path, "/api/v1/nodes/")
 	parts := strings.Split(strings.Trim(rest, "/"), "/")
 	id := parts[0]
@@ -410,14 +591,32 @@ func (s *Server) handleNodeByID(w http.ResponseWriter, r *http.Request) {
 	if len(parts) > 1 {
 		switch parts[1] {
 		case "reports":
+			if !s.requireGET(w, r) {
+				return
+			}
 			s.handleNodeReports(w, r, id)
 		case "events":
+			if !s.requireGET(w, r) {
+				return
+			}
 			s.handleNodeEvents(w, r, id)
 		case "raw":
+			if !s.requireGET(w, r) {
+				return
+			}
 			s.handleNodeRaw(w, r, id)
+		case "restart-agent":
+			s.handleNodeAction(w, r, id, "restart_agent", "")
+		case "restart-easytier":
+			s.handleNodeAction(w, r, id, "restart_easytier", "")
+		case "reboot":
+			s.handleNodeAction(w, r, id, "reboot_node", "REBOOT")
 		default:
 			writeError(w, http.StatusNotFound, "not found")
 		}
+		return
+	}
+	if !s.requireGET(w, r) {
 		return
 	}
 	node, found, err := s.store.GetNode(r.Context(), id)
@@ -430,6 +629,29 @@ func (s *Server) handleNodeByID(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, node)
+}
+
+func (s *Server) handleNodeAction(w http.ResponseWriter, r *http.Request, nodeID, action, requiredConfirm string) {
+	if !s.requirePOST(w, r) || !s.requireOperatorAuth(w, r) {
+		return
+	}
+	var req NodeActionRequest
+	if r.Body != nil {
+		if _, ok := s.decodeBody(w, r, &req); !ok {
+			return
+		}
+	}
+	if requiredConfirm != "" && req.Confirm != requiredConfirm {
+		writeError(w, http.StatusBadRequest, "confirm="+requiredConfirm+" is required")
+		return
+	}
+	payload := taskPayload(map[string]any{"confirm": req.Confirm})
+	task, err := s.store.CreateTask(r.Context(), CreateTaskRequest{NodeID: nodeID, Action: action, RequestedBy: s.operatorIdentity(r), TTLSeconds: 300, MaxAttempts: 1, TaskGroupID: "node-action-" + randomHex(6), PayloadJSON: payload})
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusCreated, task)
 }
 
 func queryLimit(r *http.Request, fallback int) int {
@@ -480,28 +702,241 @@ func (s *Server) handleNodeRaw(w http.ResponseWriter, r *http.Request, id string
 	writeJSON(w, http.StatusOK, map[string]any{"node_id": node.NodeID, "raw_json": raw})
 }
 
+func (s *Server) handleNetworkProfiles(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		profiles, err := s.store.ListNetworkProfiles(r.Context())
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, profiles)
+	case http.MethodPost:
+		if !s.requireOperatorAuth(w, r) {
+			return
+		}
+		var req NetworkProfileRequest
+		if _, ok := s.decodeBody(w, r, &req); !ok {
+			return
+		}
+		profile, err := s.store.CreateNetworkProfile(r.Context(), req)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusCreated, profile)
+	default:
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+	}
+}
+
+func (s *Server) handleNetworkProfileByID(w http.ResponseWriter, r *http.Request) {
+	rest := strings.TrimPrefix(r.URL.Path, "/api/v1/network-profiles/")
+	parts := strings.Split(strings.Trim(rest, "/"), "/")
+	id, err := strconv.ParseInt(parts[0], 10, 64)
+	if err != nil || id <= 0 {
+		writeError(w, http.StatusNotFound, "network profile not found")
+		return
+	}
+	if len(parts) == 2 && parts[1] == "apply" {
+		if !s.requirePOST(w, r) || !s.requireOperatorAuth(w, r) {
+			return
+		}
+		resp, err := s.store.ApplyNetworkProfile(r.Context(), id, s.operatorIdentity(r))
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusCreated, resp)
+		return
+	}
+	if len(parts) != 1 {
+		writeError(w, http.StatusNotFound, "network profile not found")
+		return
+	}
+	switch r.Method {
+	case http.MethodGet:
+		profile, err := s.store.GetNetworkProfile(r.Context(), id)
+		if err != nil {
+			writeError(w, http.StatusNotFound, "network profile not found")
+			return
+		}
+		writeJSON(w, http.StatusOK, profile)
+	case http.MethodPut:
+		if !s.requireOperatorAuth(w, r) {
+			return
+		}
+		var req NetworkProfileRequest
+		if _, ok := s.decodeBody(w, r, &req); !ok {
+			return
+		}
+		profile, err := s.store.UpdateNetworkProfile(r.Context(), id, req)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, profile)
+	default:
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+	}
+}
+
 func (s *Server) handleEntries(w http.ResponseWriter, r *http.Request) {
-	if !s.requireGET(w, r) {
+	switch r.Method {
+	case http.MethodGet:
+		entries, err := s.store.ListPanelEntries(r.Context())
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, entries)
+	case http.MethodPost:
+		if !s.requireOperatorAuth(w, r) {
+			return
+		}
+		var req PanelEntryRequest
+		if _, ok := s.decodeBody(w, r, &req); !ok {
+			return
+		}
+		entry, err := s.store.CreatePanelEntry(r.Context(), req)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusCreated, entry)
+	default:
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+	}
+}
+
+func (s *Server) handleEntryByID(w http.ResponseWriter, r *http.Request) {
+	rest := strings.TrimPrefix(r.URL.Path, "/api/v1/entries/")
+	parts := strings.Split(strings.Trim(rest, "/"), "/")
+	id, err := strconv.ParseInt(parts[0], 10, 64)
+	if err != nil || id <= 0 {
+		writeError(w, http.StatusNotFound, "entry not found")
 		return
 	}
-	entries, err := s.store.ListEntries(r.Context())
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+	if len(parts) == 2 && parts[1] == "apply" {
+		if !s.requirePOST(w, r) || !s.requireOperatorAuth(w, r) {
+			return
+		}
+		resp, err := s.store.ApplyPanelEntry(r.Context(), id, s.operatorIdentity(r))
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusCreated, resp)
 		return
 	}
-	writeJSON(w, http.StatusOK, entries)
+	if len(parts) != 1 {
+		writeError(w, http.StatusNotFound, "entry not found")
+		return
+	}
+	switch r.Method {
+	case http.MethodGet:
+		entry, err := s.store.GetPanelEntry(r.Context(), id)
+		if err != nil {
+			writeError(w, http.StatusNotFound, "entry not found")
+			return
+		}
+		writeJSON(w, http.StatusOK, entry)
+	case http.MethodPut:
+		if !s.requireOperatorAuth(w, r) {
+			return
+		}
+		var req PanelEntryRequest
+		if _, ok := s.decodeBody(w, r, &req); !ok {
+			return
+		}
+		entry, err := s.store.UpdatePanelEntry(r.Context(), id, req)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, entry)
+	default:
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+	}
 }
 
 func (s *Server) handleForwards(w http.ResponseWriter, r *http.Request) {
-	if !s.requireGET(w, r) {
+	switch r.Method {
+	case http.MethodGet:
+		forwards, err := s.store.ListPanelForwards(r.Context())
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, forwards)
+	case http.MethodPost:
+		if !s.requireOperatorAuth(w, r) {
+			return
+		}
+		var req PanelForwardRequest
+		if _, ok := s.decodeBody(w, r, &req); !ok {
+			return
+		}
+		forward, err := s.store.CreatePanelForward(r.Context(), req)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusCreated, forward)
+	default:
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+	}
+}
+
+func (s *Server) handleForwardByID(w http.ResponseWriter, r *http.Request) {
+	rest := strings.TrimPrefix(r.URL.Path, "/api/v1/forwards/")
+	parts := strings.Split(strings.Trim(rest, "/"), "/")
+	id, err := strconv.ParseInt(parts[0], 10, 64)
+	if err != nil || id <= 0 {
+		writeError(w, http.StatusNotFound, "forward not found")
 		return
 	}
-	forwards, err := s.store.ListForwards(r.Context())
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+	if len(parts) == 2 && parts[1] == "apply" {
+		if !s.requirePOST(w, r) || !s.requireOperatorAuth(w, r) {
+			return
+		}
+		resp, err := s.store.ApplyPanelForward(r.Context(), id, s.operatorIdentity(r))
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusCreated, resp)
 		return
 	}
-	writeJSON(w, http.StatusOK, forwards)
+	if len(parts) != 1 {
+		writeError(w, http.StatusNotFound, "forward not found")
+		return
+	}
+	switch r.Method {
+	case http.MethodGet:
+		forward, err := s.store.GetPanelForward(r.Context(), id)
+		if err != nil {
+			writeError(w, http.StatusNotFound, "forward not found")
+			return
+		}
+		writeJSON(w, http.StatusOK, forward)
+	case http.MethodPut:
+		if !s.requireOperatorAuth(w, r) {
+			return
+		}
+		var req PanelForwardRequest
+		if _, ok := s.decodeBody(w, r, &req); !ok {
+			return
+		}
+		forward, err := s.store.UpdatePanelForward(r.Context(), id, req)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, forward)
+	default:
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+	}
 }
 
 func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
@@ -514,6 +949,169 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, events)
+}
+
+func (s *Server) handlePBRPolicies(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		items, err := s.store.ListPBRPolicies(r.Context())
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, items)
+	case http.MethodPost:
+		if !s.requireOperatorAuth(w, r) {
+			return
+		}
+		var req PBRPolicyRequest
+		if _, ok := s.decodeBody(w, r, &req); !ok {
+			return
+		}
+		item, err := s.store.CreatePBRPolicy(r.Context(), req)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusCreated, item)
+	default:
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+	}
+}
+
+func (s *Server) handlePBRPolicyByID(w http.ResponseWriter, r *http.Request) {
+	rest := strings.TrimPrefix(r.URL.Path, "/api/v1/pbr-policies/")
+	parts := strings.Split(strings.Trim(rest, "/"), "/")
+	id, err := strconv.ParseInt(parts[0], 10, 64)
+	if err != nil || id <= 0 {
+		writeError(w, http.StatusNotFound, "pbr policy not found")
+		return
+	}
+	if len(parts) == 2 && parts[1] == "apply" {
+		if !s.requirePOST(w, r) || !s.requireOperatorAuth(w, r) {
+			return
+		}
+		resp, err := s.store.ApplyPBRPolicy(r.Context(), id, s.operatorIdentity(r))
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusCreated, resp)
+		return
+	}
+	if len(parts) != 1 {
+		writeError(w, http.StatusNotFound, "pbr policy not found")
+		return
+	}
+	switch r.Method {
+	case http.MethodGet:
+		item, err := s.store.GetPBRPolicy(r.Context(), id)
+		if err != nil {
+			writeError(w, http.StatusNotFound, "pbr policy not found")
+			return
+		}
+		writeJSON(w, http.StatusOK, item)
+	case http.MethodPut:
+		if !s.requireOperatorAuth(w, r) {
+			return
+		}
+		var req PBRPolicyRequest
+		if _, ok := s.decodeBody(w, r, &req); !ok {
+			return
+		}
+		item, err := s.store.UpdatePBRPolicy(r.Context(), id, req)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, item)
+	default:
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+	}
+}
+
+func (s *Server) handleDDNSProfiles(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		items, err := s.store.ListDDNSProfiles(r.Context())
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, items)
+	case http.MethodPost:
+		if !s.requireOperatorAuth(w, r) {
+			return
+		}
+		var req DDNSProfileRequest
+		if _, ok := s.decodeBody(w, r, &req); !ok {
+			return
+		}
+		item, err := s.store.CreateDDNSProfile(r.Context(), req)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusCreated, item)
+	default:
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+	}
+}
+
+func (s *Server) handleDDNSProfileByID(w http.ResponseWriter, r *http.Request) {
+	rest := strings.TrimPrefix(r.URL.Path, "/api/v1/ddns-profiles/")
+	parts := strings.Split(strings.Trim(rest, "/"), "/")
+	id, err := strconv.ParseInt(parts[0], 10, 64)
+	if err != nil || id <= 0 {
+		writeError(w, http.StatusNotFound, "ddns profile not found")
+		return
+	}
+	if len(parts) == 2 && (parts[1] == "apply" || parts[1] == "sync") {
+		if !s.requirePOST(w, r) || !s.requireOperatorAuth(w, r) {
+			return
+		}
+		var resp ApplyResponse
+		if parts[1] == "apply" {
+			resp, err = s.store.ApplyDDNSProfile(r.Context(), id, s.operatorIdentity(r))
+		} else {
+			resp, err = s.store.SyncDDNSProfile(r.Context(), id, s.operatorIdentity(r))
+		}
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusCreated, resp)
+		return
+	}
+	if len(parts) != 1 {
+		writeError(w, http.StatusNotFound, "ddns profile not found")
+		return
+	}
+	switch r.Method {
+	case http.MethodGet:
+		item, err := s.store.GetDDNSProfile(r.Context(), id)
+		if err != nil {
+			writeError(w, http.StatusNotFound, "ddns profile not found")
+			return
+		}
+		writeJSON(w, http.StatusOK, item)
+	case http.MethodPut:
+		if !s.requireOperatorAuth(w, r) {
+			return
+		}
+		var req DDNSProfileRequest
+		if _, ok := s.decodeBody(w, r, &req); !ok {
+			return
+		}
+		item, err := s.store.UpdateDDNSProfile(r.Context(), id, req)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, item)
+	default:
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+	}
 }
 
 func (s *Server) handleTasks(w http.ResponseWriter, r *http.Request) {
@@ -821,6 +1419,54 @@ func (s *Server) handlePlanByID(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			writeJSON(w, http.StatusOK, plan)
+		case "metadata-action":
+			if !s.requirePOST(w, r) || !s.requireOperatorAuth(w, r) {
+				return
+			}
+			var req PlanMetadataActionRequest
+			if _, ok := s.decodeBody(w, r, &req); !ok {
+				return
+			}
+			plan, err := s.store.ApplyPlanMetadataAction(r.Context(), id, req, s.operatorIdentity(r))
+			if err != nil {
+				if err == sql.ErrNoRows {
+					writeError(w, http.StatusNotFound, "plan not found")
+					return
+				}
+				writeError(w, http.StatusBadRequest, err.Error())
+				return
+			}
+			writeJSON(w, http.StatusOK, plan)
+		case "evidence":
+			switch r.Method {
+			case http.MethodGet:
+				evidence, err := s.store.ListPlanEvidence(r.Context(), id)
+				if err != nil {
+					writeError(w, http.StatusNotFound, "plan not found")
+					return
+				}
+				writeJSON(w, http.StatusOK, evidence)
+			case http.MethodPost:
+				if !s.requireOperatorAuth(w, r) {
+					return
+				}
+				var req PlanEvidenceRequest
+				if _, ok := s.decodeBody(w, r, &req); !ok {
+					return
+				}
+				evidence, err := s.store.CreatePlanEvidence(r.Context(), id, req, s.operatorIdentity(r))
+				if err != nil {
+					if err == sql.ErrNoRows {
+						writeError(w, http.StatusNotFound, "plan not found")
+						return
+					}
+					writeError(w, http.StatusBadRequest, err.Error())
+					return
+				}
+				writeJSON(w, http.StatusCreated, evidence)
+			default:
+				writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+			}
 		case "safety-gate":
 			if !s.requireGET(w, r) {
 				return

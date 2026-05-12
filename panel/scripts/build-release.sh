@@ -4,6 +4,7 @@ set -Eeuo pipefail
 ROOT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
 PANEL_DIR="${ROOT_DIR}/panel"
 DIST_DIR="${PANEL_DIR}/dist"
+PANEL_VERSION="${PANEL_VERSION:-3.0.0-alpha.1}"
 CONTROLLER_GOCACHE="${PANEL_DIR}/controller/.gocache"
 AGENT_GOCACHE="${PANEL_DIR}/agent/.gocache"
 
@@ -67,11 +68,14 @@ echo "[INFO] Building web assets"
   "${NPM_BIN}" --prefix web run build
 )
 
-rm -rf "${DIST_DIR}/web" "${DIST_DIR}/examples" "${DIST_DIR}/docs"
-mkdir -p "${DIST_DIR}/web" "${DIST_DIR}/examples" "${DIST_DIR}/docs"
+rm -rf "${DIST_DIR}/web" "${DIST_DIR}/examples" "${DIST_DIR}/docs" "${DIST_DIR}/scripts"
+mkdir -p "${DIST_DIR}/web" "${DIST_DIR}/examples" "${DIST_DIR}/docs" "${DIST_DIR}/scripts"
 cp -R "${PANEL_DIR}/controller/web/dist/." "${DIST_DIR}/web/"
 cp -R "${PANEL_DIR}/examples/." "${DIST_DIR}/examples/"
 cp -R "${PANEL_DIR}/docs/." "${DIST_DIR}/docs/"
+install -m 0755 "${PANEL_DIR}/scripts/install-controller.sh" "${DIST_DIR}/scripts/install-controller.sh"
+install -m 0755 "${PANEL_DIR}/scripts/install-agent.sh" "${DIST_DIR}/scripts/install-agent.sh"
+printf 'LEIKWAN_PANEL_VERSION=%s\n' "${PANEL_VERSION}" >"${DIST_DIR}/VERSION"
 
 echo "[INFO] Writing SHA256SUMS"
 (

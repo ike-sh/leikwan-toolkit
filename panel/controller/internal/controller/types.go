@@ -2,7 +2,7 @@ package controller
 
 import "encoding/json"
 
-const Version = "2.1.0"
+const Version = "3.0.0-alpha.1"
 
 type HealthResponse struct {
 	Name    string `json:"name"`
@@ -21,6 +21,25 @@ type AuthStatusResponse struct {
 	StrictAuth             bool   `json:"strict_auth"`
 	AgentAuthConfigured    bool   `json:"agent_auth_configured"`
 	Version                string `json:"version"`
+}
+
+type LoginRequest struct {
+	Token string `json:"token"`
+}
+
+type LoginResponse struct {
+	Status      string `json:"status"`
+	Identity    string `json:"identity"`
+	Version     string `json:"version"`
+	StrictAuth  bool   `json:"strict_auth"`
+	AgentAuth   bool   `json:"agent_auth_configured"`
+	OperatorSet bool   `json:"operator_auth_configured"`
+}
+
+type MeResponse struct {
+	Authenticated bool   `json:"authenticated"`
+	Identity      string `json:"identity,omitempty"`
+	Version       string `json:"version"`
 }
 
 type RegisterRequest struct {
@@ -56,18 +75,33 @@ type ReportRequest struct {
 }
 
 type AgentCapabilities struct {
-	LQAvailable                  bool     `json:"lq_available"`
-	CoreVersion                  string   `json:"core_version"`
-	SupportsStatusJSON           bool     `json:"supports_status_json"`
-	SupportsDoctorJSON           bool     `json:"supports_doctor_json"`
-	SupportsForwardList          bool     `json:"supports_forward_list"`
-	SupportsDDNSOverview         bool     `json:"supports_ddns_overview"`
-	EnableTasks                  bool     `json:"enable_tasks"`
-	SupportsSnapshotManualRecord bool     `json:"supports_snapshot_manual_record"`
-	SupportsRollbackManualRecord bool     `json:"supports_rollback_manual_record"`
-	WriteActionsSupported        bool     `json:"write_actions_supported"`
-	SupportedWriteActions        []string `json:"supported_write_actions,omitempty"`
-	AllowedTaskActions           []string `json:"allowed_task_actions,omitempty"`
+	LQAvailable                        bool     `json:"lq_available"`
+	CoreVersion                        string   `json:"core_version"`
+	SupportsStatusJSON                 bool     `json:"supports_status_json"`
+	SupportsDoctorJSON                 bool     `json:"supports_doctor_json"`
+	SupportsForwardList                bool     `json:"supports_forward_list"`
+	SupportsDDNSOverview               bool     `json:"supports_ddns_overview"`
+	EnableTasks                        bool     `json:"enable_tasks"`
+	SupportsSnapshotManualRecord       bool     `json:"supports_snapshot_manual_record"`
+	SupportsRollbackManualRecord       bool     `json:"supports_rollback_manual_record"`
+	WriteActionsSupported              bool     `json:"write_actions_supported"`
+	SupportedWriteActions              []string `json:"supported_write_actions,omitempty"`
+	ControllerMetadataActionsSupported bool     `json:"controller_metadata_actions_supported"`
+	AllowedTaskActions                 []string `json:"allowed_task_actions,omitempty"`
+}
+
+type ControllerInfoResponse struct {
+	Version                 string   `json:"version"`
+	ControllerURL           string   `json:"controller_url"`
+	ControllerURLGuess      string   `json:"controller_url_guess"`
+	OperatorAuthConfigured  bool     `json:"operator_auth_configured"`
+	AgentAuthConfigured     bool     `json:"agent_auth_configured"`
+	StrictAuth              bool     `json:"strict_auth"`
+	DemoApply               bool     `json:"demo_apply"`
+	InstallScriptURL        string   `json:"install_script_url"`
+	SupportedRoles          []string `json:"supported_roles"`
+	SupportedInstallMethods []string `json:"supported_install_methods"`
+	Note                    string   `json:"note"`
 }
 
 type EntryPayload struct {
@@ -158,12 +192,13 @@ type Event struct {
 }
 
 type CreateTaskRequest struct {
-	NodeID      string `json:"node_id"`
-	Action      string `json:"action"`
-	RequestedBy string `json:"requested_by,omitempty"`
-	TTLSeconds  int    `json:"ttl_seconds,omitempty"`
-	MaxAttempts int    `json:"max_attempts,omitempty"`
-	TaskGroupID string `json:"task_group_id,omitempty"`
+	NodeID      string          `json:"node_id"`
+	Action      string          `json:"action"`
+	RequestedBy string          `json:"requested_by,omitempty"`
+	TTLSeconds  int             `json:"ttl_seconds,omitempty"`
+	MaxAttempts int             `json:"max_attempts,omitempty"`
+	TaskGroupID string          `json:"task_group_id,omitempty"`
+	PayloadJSON json.RawMessage `json:"payload_json,omitempty"`
 }
 
 type TaskResultRequest struct {
@@ -189,6 +224,7 @@ type Task struct {
 	Attempt        int             `json:"attempt"`
 	MaxAttempts    int             `json:"max_attempts"`
 	TaskGroupID    string          `json:"task_group_id,omitempty"`
+	PayloadJSON    json.RawMessage `json:"payload_json,omitempty"`
 	ResultStdout   string          `json:"result_stdout,omitempty"`
 	ResultStderr   string          `json:"result_stderr,omitempty"`
 	ExitCode       int             `json:"exit_code"`
@@ -212,12 +248,169 @@ type TaskTimelineItem struct {
 }
 
 type BootstrapAgentCommandResponse struct {
-	Command       string `json:"command"`
-	ControllerURL string `json:"controller_url"`
-	Role          string `json:"role"`
-	NodeName      string `json:"node_name"`
-	Token         string `json:"token"`
-	Note          string `json:"note"`
+	Command            string   `json:"command"`
+	MaskedCommand      string   `json:"masked_command,omitempty"`
+	FullCommand        string   `json:"full_command,omitempty"`
+	ControllerURL      string   `json:"controller_url"`
+	InstallScriptURL   string   `json:"install_script_url"`
+	InstallMethod      string   `json:"install_method"`
+	Role               string   `json:"role"`
+	NodeName           string   `json:"node_name"`
+	Token              string   `json:"token"`
+	Note               string   `json:"note"`
+	EnableTasks        bool     `json:"enable_tasks"`
+	EnableWriteActions bool     `json:"enable_write_actions"`
+	Warnings           []string `json:"warnings,omitempty"`
+}
+
+type AgentTokenResponse struct {
+	Token        string   `json:"token"`
+	TokenMode    string   `json:"token_mode"`
+	ExpiresAt    string   `json:"expires_at,omitempty"`
+	RoleHint     string   `json:"role_hint,omitempty"`
+	NodeNameHint string   `json:"node_name_hint,omitempty"`
+	Warnings     []string `json:"warnings,omitempty"`
+}
+
+type NetworkProfileRequest struct {
+	Name          string `json:"name"`
+	NetworkName   string `json:"network_name,omitempty"`
+	NetworkSecret string `json:"network_secret,omitempty"`
+	RelayNodeID   string `json:"relay_node_id"`
+}
+
+type NetworkProfile struct {
+	ID            int64  `json:"id"`
+	Name          string `json:"name"`
+	NetworkName   string `json:"network_name"`
+	NetworkSecret string `json:"network_secret,omitempty"`
+	RelayNodeID   string `json:"relay_node_id"`
+	CreatedAt     string `json:"created_at"`
+	UpdatedAt     string `json:"updated_at"`
+}
+
+type PanelEntryRequest struct {
+	NetworkID       int64  `json:"network_id"`
+	EntryNodeID     string `json:"entry_node_id"`
+	RelayNodeID     string `json:"relay_node_id"`
+	ListenHost      string `json:"listen_host"`
+	ListenPortStart int    `json:"listen_port_start"`
+	ListenPortEnd   int    `json:"listen_port_end"`
+	Protocols       string `json:"protocols"`
+	Status          string `json:"status,omitempty"`
+}
+
+type PanelEntry struct {
+	ID              int64  `json:"id"`
+	NetworkID       int64  `json:"network_id"`
+	EntryNodeID     string `json:"entry_node_id"`
+	RelayNodeID     string `json:"relay_node_id"`
+	ListenHost      string `json:"listen_host"`
+	ListenPortStart int    `json:"listen_port_start"`
+	ListenPortEnd   int    `json:"listen_port_end"`
+	Protocols       string `json:"protocols"`
+	Status          string `json:"status"`
+	CreatedAt       string `json:"created_at"`
+	UpdatedAt       string `json:"updated_at"`
+}
+
+type PanelForwardRequest struct {
+	NetworkID   int64  `json:"network_id"`
+	EntryID     int64  `json:"entry_id"`
+	RelayNodeID string `json:"relay_node_id"`
+	Name        string `json:"name"`
+	ListenPort  int    `json:"listen_port"`
+	TargetHost  string `json:"target_host"`
+	TargetPort  int    `json:"target_port"`
+	Protocol    string `json:"protocol"`
+	PBRPolicyID int64  `json:"pbr_policy_id,omitempty"`
+	Status      string `json:"status,omitempty"`
+}
+
+type PanelForward struct {
+	ID          int64  `json:"id"`
+	NetworkID   int64  `json:"network_id"`
+	EntryID     int64  `json:"entry_id"`
+	RelayNodeID string `json:"relay_node_id"`
+	Name        string `json:"name"`
+	ListenPort  int    `json:"listen_port"`
+	TargetHost  string `json:"target_host"`
+	TargetPort  int    `json:"target_port"`
+	Protocol    string `json:"protocol"`
+	PBRPolicyID int64  `json:"pbr_policy_id,omitempty"`
+	Status      string `json:"status"`
+	CreatedAt   string `json:"created_at"`
+	UpdatedAt   string `json:"updated_at"`
+}
+
+type PBRPolicyRequest struct {
+	Name            string `json:"name"`
+	RelayNodeID     string `json:"relay_node_id"`
+	SourceCIDR      string `json:"source_cidr"`
+	TargetCIDR      string `json:"target_cidr"`
+	OutputInterface string `json:"output_interface"`
+	Gateway         string `json:"gateway"`
+	TableID         int    `json:"table_id"`
+	Priority        int    `json:"priority"`
+	Mark            string `json:"mark"`
+	Status          string `json:"status,omitempty"`
+}
+
+type PBRPolicy struct {
+	ID              int64  `json:"id"`
+	Name            string `json:"name"`
+	RelayNodeID     string `json:"relay_node_id"`
+	SourceCIDR      string `json:"source_cidr"`
+	TargetCIDR      string `json:"target_cidr"`
+	OutputInterface string `json:"output_interface"`
+	Gateway         string `json:"gateway"`
+	TableID         int    `json:"table_id"`
+	Priority        int    `json:"priority"`
+	Mark            string `json:"mark"`
+	Status          string `json:"status"`
+	CreatedAt       string `json:"created_at"`
+	UpdatedAt       string `json:"updated_at"`
+}
+
+type DDNSProfileRequest struct {
+	NodeID          string `json:"node_id"`
+	Provider        string `json:"provider"`
+	Domain          string `json:"domain"`
+	RecordType      string `json:"record_type"`
+	APIToken        string `json:"api_token,omitempty"`
+	ZoneID          string `json:"zone_id,omitempty"`
+	RecordID        string `json:"record_id,omitempty"`
+	Target          string `json:"target,omitempty"`
+	IntervalSeconds int    `json:"interval_seconds,omitempty"`
+	Status          string `json:"status,omitempty"`
+}
+
+type DDNSProfile struct {
+	ID              int64  `json:"id"`
+	NodeID          string `json:"node_id"`
+	Provider        string `json:"provider"`
+	Domain          string `json:"domain"`
+	RecordType      string `json:"record_type"`
+	APIToken        string `json:"api_token,omitempty"`
+	ZoneID          string `json:"zone_id,omitempty"`
+	RecordID        string `json:"record_id,omitempty"`
+	Target          string `json:"target,omitempty"`
+	IntervalSeconds int    `json:"interval_seconds"`
+	Status          string `json:"status"`
+	LastSyncAt      string `json:"last_sync_at,omitempty"`
+	LastError       string `json:"last_error,omitempty"`
+	CreatedAt       string `json:"created_at"`
+	UpdatedAt       string `json:"updated_at"`
+}
+
+type NodeActionRequest struct {
+	Confirm string `json:"confirm,omitempty"`
+}
+
+type ApplyResponse struct {
+	TaskGroupID string  `json:"task_group_id"`
+	TaskIDs     []int64 `json:"task_ids"`
+	Message     string  `json:"message"`
 }
 
 type TopologyLink struct {
@@ -260,30 +453,69 @@ type PlanRollbackInfoRequest struct {
 	RollbackNote      string `json:"rollback_note"`
 }
 
+type PlanMetadataActionRequest struct {
+	Action             string `json:"action"`
+	Note               string `json:"note,omitempty"`
+	SnapshotRef        string `json:"snapshot_ref,omitempty"`
+	SnapshotNote       string `json:"snapshot_note,omitempty"`
+	RollbackRef        string `json:"rollback_ref,omitempty"`
+	RollbackNote       string `json:"rollback_note,omitempty"`
+	ExecutionStatus    string `json:"execution_status,omitempty"`
+	VerificationStatus string `json:"verification_status,omitempty"`
+	EvidenceType       string `json:"evidence_type,omitempty"`
+	Title              string `json:"title,omitempty"`
+	Content            string `json:"content,omitempty"`
+}
+
+type PlanEvidenceRequest struct {
+	EvidenceType string `json:"evidence_type"`
+	Title        string `json:"title"`
+	Content      string `json:"content"`
+}
+
+type PlanEvidence struct {
+	ID              int64  `json:"id"`
+	PlanID          int64  `json:"plan_id"`
+	EvidenceType    string `json:"evidence_type"`
+	Title           string `json:"title"`
+	Content         string `json:"content"`
+	CreatedBy       string `json:"created_by"`
+	CreatedAt       string `json:"created_at"`
+	RedactedContent string `json:"redacted_content"`
+}
+
 type SafetyGateResponse struct {
-	PlanID         int64                 `json:"plan_id"`
-	DryRunPassed   bool                  `json:"dry_run_passed"`
-	ApprovalReady  bool                  `json:"approval_ready"`
-	SnapshotReady  bool                  `json:"snapshot_ready"`
-	RollbackReady  bool                  `json:"rollback_ready"`
-	BlockedReasons []string              `json:"blocked_reasons"`
-	Warnings       []string              `json:"warnings"`
-	Overall        string                `json:"overall"`
-	ActionReview   *ActionReviewResponse `json:"action_review,omitempty"`
+	PlanID                     int64                 `json:"plan_id"`
+	DryRunPassed               bool                  `json:"dry_run_passed"`
+	ApprovalReady              bool                  `json:"approval_ready"`
+	SnapshotReady              bool                  `json:"snapshot_ready"`
+	RollbackReady              bool                  `json:"rollback_ready"`
+	MetadataActionsReady       bool                  `json:"metadata_actions_ready"`
+	EvidenceCount              int                   `json:"evidence_count"`
+	ManualExecutionRecorded    bool                  `json:"manual_execution_recorded"`
+	ManualVerificationRecorded bool                  `json:"manual_verification_recorded"`
+	BlockedReasons             []string              `json:"blocked_reasons"`
+	Warnings                   []string              `json:"warnings"`
+	Overall                    string                `json:"overall"`
+	ActionReview               *ActionReviewResponse `json:"action_review,omitempty"`
 }
 
 type ActionDefinition struct {
-	Action               string   `json:"action"`
-	Title                string   `json:"title"`
-	Category             string   `json:"category"`
-	RiskLevel            string   `json:"risk_level"`
-	Description          string   `json:"description"`
-	RequiredGates        []string `json:"required_gates"`
-	RequiredCapabilities []string `json:"required_capabilities"`
-	RollbackRequired     bool     `json:"rollback_required"`
-	SnapshotRequired     bool     `json:"snapshot_required"`
-	ApprovalRequired     bool     `json:"approval_required"`
-	Enabled              bool     `json:"enabled"`
+	Action                string   `json:"action"`
+	Title                 string   `json:"title"`
+	Category              string   `json:"category"`
+	RiskLevel             string   `json:"risk_level"`
+	Description           string   `json:"description"`
+	RequiredGates         []string `json:"required_gates"`
+	RequiredCapabilities  []string `json:"required_capabilities"`
+	RollbackRequired      bool     `json:"rollback_required"`
+	SnapshotRequired      bool     `json:"snapshot_required"`
+	ApprovalRequired      bool     `json:"approval_required"`
+	NodeMutation          bool     `json:"node_mutation"`
+	AgentRequired         bool     `json:"agent_required"`
+	CommandDispatch       bool     `json:"command_dispatch"`
+	OperatorTokenRequired bool     `json:"operator_token_required"`
+	Enabled               bool     `json:"enabled"`
 }
 
 type ActionCatalogResponse struct {
@@ -321,6 +553,13 @@ type Plan struct {
 	ExecutionStatus        string          `json:"execution_status"`
 	ExecutionNote          string          `json:"execution_note"`
 	ManualResult           string          `json:"manual_result"`
+	ManualEvidence         []PlanEvidence  `json:"manual_evidence,omitempty"`
+	ExecutedBy             string          `json:"executed_by,omitempty"`
+	ExecutedAt             string          `json:"executed_at,omitempty"`
+	VerifiedBy             string          `json:"verified_by,omitempty"`
+	VerifiedAt             string          `json:"verified_at,omitempty"`
+	VerificationNote       string          `json:"verification_note,omitempty"`
+	Timeline               json.RawMessage `json:"timeline_json,omitempty"`
 	DryRunStatus           string          `json:"dry_run_status"`
 	DryRunTaskIDs          []int64         `json:"dry_run_task_ids"`
 	DryRunReport           json.RawMessage `json:"dry_run_report,omitempty"`

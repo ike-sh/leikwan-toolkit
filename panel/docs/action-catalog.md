@@ -1,76 +1,74 @@
 # Action Catalog
 
-Leikwan Panel `2.1.0` exposes a read-only action catalog.
-
-## API
-
-```text
-GET /api/v1/action-catalog
-GET /api/v1/action-catalog/:action
-```
-
-The catalog is metadata only. It never queues tasks and never modifies nodes.
+Leikwan Panel `3.0.0-alpha.1` exposes all known actions through `/api/v1/action-catalog`.
 
 ## Readonly Actions
 
-Readonly actions are the only actions Agents can execute when `enable_tasks=true`:
+Readonly task actions are enabled and mapped to fixed Agent argv:
 
-```text
-probe_core_version
-run_status
-run_status_json
-run_doctor
-run_doctor_json
-list_forwards
-ddns_overview
-```
+- `probe_core_version`
+- `run_status`
+- `run_status_json`
+- `run_doctor`
+- `run_doctor_json`
+- `list_forwards`
+- `ddns_overview`
 
-Each maps to a fixed argv array. The Controller does not send command strings.
+They do not accept command strings.
 
-## Future Write Actions
+## Metadata-only Actions
 
-Future write actions remain disabled in 2.1.0:
+Controller-only metadata actions remain enabled:
 
-```text
-create_entry
-create_forward
-switch_entry
-update_ddns_config
-rollback_config
-restart_relay
-```
+- `record_snapshot_ref`
+- `record_rollback_ref`
+- `mark_plan_executed`
+- `mark_plan_verified`
+- `attach_manual_evidence`
 
-Every future write action has:
+They update Controller audit metadata only and never create Agent tasks.
 
-- `enabled=false`
-- `risk_level`
-- `required_gates`
-- `required_capabilities`
-- `snapshot_required`
-- `rollback_required`
-- `approval_required`
+## Demo Alpha Write Actions
 
-These are design review fields, not execution permission.
+`3.0.0-alpha.1` enables a narrow `alpha_write` category:
 
-## Blocked Actions
+- `configure_node_role`
+- `apply_network_profile`
+- `apply_entry_config`
+- `apply_forward_config`
+- `reload_leikwan_core`
+- `verify_applied_config`
 
-Blocked actions are permanently unsafe for Panel execution:
+These require Operator token, Agent token for pickup, target node online, Agent `enable_write_actions=true`, fixed action allowlist and redacted payload.
 
-```text
-arbitrary_command
-shell_c
-bash_c
-eval
-raw_nft
-raw_iptables
-raw_ip_route
-rm
-write_etc
-curl_pipe_bash
-```
+In 3.0 alpha they can write Panel-managed EasyTier, nftables, PBR and DDNS config or run fixed lifecycle argv. They do not expose arbitrary command dispatch.
 
-Blocked actions are always `enabled=false`.
+## Future Node Writes Still Disabled
 
-## Why Command Strings Are Not Accepted
+These actions stay disabled / future:
 
-Arbitrary command strings would bypass the safety model, redaction checks, dry-run semantics, rollback design, and the Agent allowlist. Panel APIs therefore accept action names only, and the Agent maps only known readonly action names to fixed argv.
+- `create_entry`
+- `create_forward`
+- `switch_entry`
+- `update_ddns_config`
+- `rollback_config`
+- `restart_relay`
+
+The 3.0 alpha apply flow uses lower-level fixed actions instead of enabling high-level guarded actions such as `create_forward` or `switch_entry`.
+
+## Permanently Blocked Actions
+
+Blocked actions stay disabled:
+
+- `arbitrary_command`
+- `shell_c`
+- `bash_c`
+- `eval`
+- `raw_nft`
+- `raw_iptables`
+- `raw_ip_route`
+- `rm`
+- `write_etc`
+- `curl_pipe_bash`
+
+The Controller does not accept command strings for any action.

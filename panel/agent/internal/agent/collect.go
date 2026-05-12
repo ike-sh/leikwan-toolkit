@@ -37,13 +37,14 @@ func (c Collector) Collect(ctx context.Context, cfg Config) ReportRequest {
 		AgentVersion: Version, CoreVersion: "missing", Status: "online", HealthScore: 100, IntervalSeconds: cfg.IntervalSeconds,
 		Services: map[string]string{},
 		Capabilities: Capabilities{
-			CoreVersion:                  "missing",
-			EnableTasks:                  cfg.EnableTasks,
-			SupportsSnapshotManualRecord: true,
-			SupportsRollbackManualRecord: true,
-			WriteActionsSupported:        false,
-			SupportedWriteActions:        []string{},
-			AllowedTaskActions:           AllowedTaskActions(),
+			CoreVersion:                        "missing",
+			EnableTasks:                        cfg.EnableTasks,
+			SupportsSnapshotManualRecord:       true,
+			SupportsRollbackManualRecord:       true,
+			WriteActionsSupported:              cfg.EnableWriteActions,
+			SupportedWriteActions:              SupportedWriteActions(cfg),
+			ControllerMetadataActionsSupported: false,
+			AllowedTaskActions:                 AllowedTaskActions(),
 		},
 	}
 	if report.IntervalSeconds <= 0 {
@@ -103,7 +104,10 @@ func (c Collector) Collect(ctx context.Context, cfg Config) ReportRequest {
 	}
 
 	report.Services["nftables"] = c.systemctlActive(ctx, "nftables")
-	report.Services["easytier"] = c.systemctlActive(ctx, "easytier-relay.service")
+	report.Services["easytier"] = c.systemctlActive(ctx, "leikwan-easytier")
+	if report.Services["easytier"] == "unknown" || strings.Contains(report.Services["easytier"], "failed") {
+		report.Services["easytier_relay"] = c.systemctlActive(ctx, "easytier-relay.service")
+	}
 	report.Services["leikwan-agent"] = "active"
 	report.Services["ddns_timer"] = c.systemctlActive(ctx, "leikwan-ddns-refresh.timer")
 	if report.Services["easytier"] == "unknown" || strings.Contains(report.Services["easytier"], "failed") {

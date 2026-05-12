@@ -1,130 +1,43 @@
 # Safety Model
 
-Leikwan Panel `2.1.0` keeps the stable Plan safety model and adds a very small readonly task channel.
+Leikwan Panel `3.0.0-alpha.1` is a demo apply release with a narrow write boundary.
 
-## Command Classification
+## Still Forbidden
 
-```text
-readonly
-manual
-blocked
-```
-
-- `readonly`: known safe inspection commands such as `lq status`.
-- `manual`: comments and TODO steps that require an operator.
-- `blocked`: command text that matches a forbidden pattern and must not be generated.
-
-## Safety Level
-
-```text
-safe
-caution
-dangerous
-```
-
-- `safe`: read-only commands and passing preflight.
-- `caution`: manual steps, warnings, unknown or offline nodes.
-- `dangerous`: blocked command text was detected and removed.
+The Panel still forbids Controller-provided command strings, user-entered shell commands, `shell -c`, `bash -c`, `eval`, raw nft, raw iptables, raw ip route, `rm`, arbitrary write into `/etc`, `curl | bash`, Agent token calling Operator APIs, Operator token calling Agent APIs, backend/landing node management, smooth public entry switching, relay restart automation and rollback automation.
 
 ## Readonly Tasks
 
-2.1.0 only allows these task actions:
+Readonly tasks are fixed Agent actions mapped to fixed `lq` argv.
 
-```text
-probe_core_version
-run_status
-run_status_json
-run_doctor
-run_doctor_json
-list_forwards
-ddns_overview
-```
+## Metadata-only Actions
 
-Controller queues action names only. Agent maps each action to a fixed argv array and never executes `shell -c`, `bash -c`, `eval`, or a command string from Controller.
+Metadata actions update only Controller DB audit state.
 
-`enable_tasks` defaults to `false`, so a node must opt in before polling tasks.
+## Demo Alpha Write Actions
 
-In `2.1.0`, task approval is audit-only. `approve` and `reject` update Controller metadata and timeline; they do not enable write operations.
+`3.0.0-alpha.1` enables fixed alpha actions only when an Agent has `enable_write_actions=true`:
 
-## Readonly Plan Dry-run
+- `configure_node_role`
+- `apply_network_profile`
+- `apply_entry_config`
+- `apply_forward_config`
+- `reload_leikwan_core`
+- `verify_applied_config`
 
-Plan dry-run creates only readonly allowlisted tasks and aggregates their redacted results back into the Plan. It does not execute generated command text.
+Those actions can write Panel-managed config files and use fixed argv only:
 
-Dry-run can report `passed`, `warning`, or `failed`, but those states are advisory. They never grant write permission.
+- `/etc/leikwan-toolkit/panel-network.json`
+- `/etc/leikwan-toolkit/panel-entry.json`
+- `/etc/leikwan-toolkit/panel-forward.json`
+- `/var/lib/leikwan-panel-agent/`
 
-## Blocked Patterns
+Backups go to `/var/backups/leikwan-panel-agent/`.
 
-The blocked list includes:
+## Operator Auth
 
-```text
-rm
-systemctl restart
-systemctl stop
-nft
-iptables
-ip route
-curl | bash
-bash -c
-eval
-write into /etc
-```
+All mutating Controller APIs require Operator token. Agent token cannot call them. Agent APIs require Agent token and do not accept Operator token.
 
-If a blocked pattern appears in payload-derived Plan text, the plan becomes `dangerous` and the blocked line is removed from generated commands.
+## Redaction
 
-## Why 2.1.0 Still Does Not Write
-
-Readonly tasks are a narrow observability bridge. Future write automation would still need:
-
-- explicit write allowlist
-- dry-run
-- snapshot confirmation
-- rollback path
-- audit logs
-- operator approval
-- scoped permissions
-
-Until those exist, Panel does not modify Leikwan Core, nftables, systemd, EasyTier, DDNS, entries, forwards or PBR.
-
-## 2.1.0 Snapshot / Rollback Safety Framework
-
-Leikwan Panel 2.1.0 adds Plan fields for manual snapshot and rollback metadata plus Safety Gate and verification APIs. The Controller only records operator-provided references and notes. It does not create snapshots, roll back nodes, restart services, or modify Core configuration.
-
-New Plan APIs:
-
-```text
-POST /api/v1/plans/:id/snapshot
-POST /api/v1/plans/:id/rollback-info
-GET  /api/v1/plans/:id/safety-gate
-POST /api/v1/plans/:id/verify
-```
-
-See `snapshot-rollback-beta.md` and `safety-gate.md`.
-
-## 2.1.0 Write Action Review
-
-Leikwan Panel 2.1.0 adds an Action Catalog and Plan Action Review. This is still non-executing.
-
-Action categories:
-
-```text
-readonly
-future_write_low
-future_write_guarded
-future_write_dangerous
-blocked
-```
-
-Risk levels:
-
-```text
-low
-medium
-high
-critical
-```
-
-Future write actions such as `create_entry`, `create_forward`, `switch_entry`, `update_ddns_config`, `rollback_config`, and `restart_relay` are visible for review with `enabled=false`.
-
-Blocked actions such as arbitrary commands, `shell -c`, `bash -c`, `eval`, raw `nft`, raw `iptables`, raw `ip route`, `rm`, direct `/etc` writes, and `curl | bash` remain permanently blocked.
-
-`ready_for_future_execution` is always `false` in 2.1.0 because write execution is disabled.
+Task payloads, results, stdout, stderr, raw JSON, evidence and timeline entries are redacted for tokens, secrets, passwords, private keys, network secrets, custom URLs, custom commands and Authorization headers.

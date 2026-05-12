@@ -1,19 +1,19 @@
 # Leikwan Panel 2.1.0 Stable
 
-Leikwan Panel 2.1.0 is the stable safety-control release for the Panel line. Leikwan Toolkit 1.4.x remains the Shell Core / LTS path for real forwarding behavior. The Panel observes, audits and prepares manual plans; it does not modify node configuration.
+Leikwan Panel `2.1.0` is the stable safety-control release for the Panel line. Leikwan Toolkit `1.4.x` remains the Shell Core / LTS path for real forwarding behavior. The Panel observes, audits and prepares manual plans; it does not modify node configuration.
 
 ## Scope
 
 2.1.0 includes:
 
 - Controller / Agent architecture
-- Node heartbeat and status reporting
-- Readonly node inventory, entries and forwards views
-- Readonly allowlisted tasks
-- Task lifecycle with cancel, retry, TTL, timeline and result limits
-- Manual Plan execution guides
+- node heartbeat and status reporting
+- readonly node inventory, entries and forwards views
+- readonly allowlisted tasks
+- task lifecycle with cancel, retry, TTL, timeline and result limits
+- manual Plan execution guides
 - Plan dry-run using readonly tasks
-- Manual snapshot / rollback metadata
+- manual snapshot / rollback metadata
 - Safety Gate
 - Action Catalog
 - Write Action Review
@@ -38,8 +38,6 @@ Leikwan Panel 2.1.0 is the stable safety-control release for the Panel line. Lei
 Future write actions remain visible only as disabled catalog entries with `enabled=false`.
 
 ## Controller Deployment
-
-The Controller can run on a dedicated management host:
 
 ```bash
 export LEIKWAN_CONTROLLER_TOKEN='agent-token'
@@ -66,10 +64,6 @@ leikwan-agent --config /etc/leikwan-agent/config.yml
 
 The tokens are not interchangeable. Events and timelines store only operator fingerprints, not full tokens.
 
-## Known Limits
+## Path to 2.2
 
-2.1.0 is intentionally conservative. It provides manual plans, dry-run reports and audit metadata, but it does not apply changes. Operators must still SSH to the target node and use Leikwan Core manually for any real configuration change.
-
-## Path to 2.2.0
-
-2.2.0 may explore a very small set of whitelist write operations, but only after dry-run, snapshot, rollback, approval, verification and audit requirements are satisfied. Arbitrary command strings and raw shell execution remain out of scope.
+2.2 may explore small Controller metadata-only actions first, and only later consider tightly bounded node write experiments. Arbitrary command strings and raw shell execution remain out of scope.

@@ -1,8 +1,8 @@
 # Snapshot / Rollback Metadata
 
-Leikwan Panel `2.1.0` adds a Controller-side safety framework for Plans.
+Leikwan Panel `3.0.0-alpha.1` adds a Controller-side safety framework for Plans.
 
-Leikwan Panel 2.1.0 records manual snapshot and rollback information. It does not create snapshots, does not restore snapshots, does not roll back nodes, and does not change Leikwan Core configuration.
+Leikwan Panel 3.0.0-alpha.1 records manual snapshot and rollback information. It does not create snapshots, does not restore snapshots, does not roll back nodes, and does not change Leikwan Core configuration.
 
 ## Snapshot Policy
 
@@ -56,11 +56,11 @@ Snapshot and rollback metadata is redacted before storage and display. Tokens, s
 
 ## Why This Exists
 
-Future write automation must have an auditable recovery path before it can be considered safe. Leikwan Panel 2.1.0 establishes the fields, UI and API shape without enabling writes.
+Future write automation must have an auditable recovery path before it can be considered safe. Leikwan Panel 3.0.0-alpha.1 establishes the fields, UI and API shape without enabling writes.
 
-## 2.1.0 Action Review Integration
+## 3.0.0-alpha.1 Action Review Integration
 
-`2.1.0` adds action review metadata on top of this framework. Snapshot and rollback fields are treated as required gates for future write actions such as `create_entry`, `create_forward`, and `switch_entry`.
+`3.0.0-alpha.1` adds action review metadata on top of this framework. Snapshot and rollback fields are treated as required gates for future write actions such as `create_entry`, `create_forward`, and `switch_entry`.
 
 The review remains informational:
 
@@ -68,6 +68,6 @@ The review remains informational:
 - it does not roll back nodes
 - it does not queue Agent write tasks
 - it always reports `ready_for_future_execution=false`
-## Stable Note
+## Compatibility Note
 
-This document remains under its original filename for link compatibility. The snapshot and rollback metadata model described here is part of Leikwan Panel 2.1.0 stable.
+This document remains under its original filename for link compatibility. The snapshot and rollback metadata model described here is part of Leikwan Panel 3.0.0-alpha.1.

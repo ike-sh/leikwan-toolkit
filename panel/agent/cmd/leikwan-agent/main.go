@@ -20,6 +20,8 @@ func main() {
 	token := flag.String("token", "", "controller bearer token for --init-config")
 	nodeName := flag.String("node-name", "", "node name for --init-config")
 	role := flag.String("role", "unknown", "node role for --init-config")
+	enableTasks := flag.Bool("enable-tasks", true, "enable readonly task polling for --init-config")
+	enableWriteActions := flag.Bool("enable-write-actions", false, "enable 2.2 alpha demo write actions for --init-config")
 	flag.Parse()
 
 	if *initConfig {
@@ -30,7 +32,8 @@ func main() {
 			NodeName:            *nodeName,
 			Role:                *role,
 			IntervalSeconds:     30,
-			EnableTasks:         false,
+			EnableTasks:         *enableTasks,
+			EnableWriteActions:  *enableWriteActions,
 			TaskIntervalSeconds: 10,
 			TaskTimeoutSeconds:  20,
 			MaxConcurrentTasks:  1,

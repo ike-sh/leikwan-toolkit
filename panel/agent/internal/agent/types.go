@@ -2,7 +2,7 @@ package agent
 
 import "encoding/json"
 
-const Version = "2.1.0"
+const Version = "3.0.0-alpha.1"
 
 type Config struct {
 	ControllerURL       string
@@ -12,6 +12,7 @@ type Config struct {
 	Role                string
 	IntervalSeconds     int
 	EnableTasks         bool
+	EnableWriteActions  bool
 	TaskIntervalSeconds int
 	TaskTimeoutSeconds  int
 	MaxConcurrentTasks  int
@@ -51,18 +52,19 @@ type ReportRequest struct {
 }
 
 type Capabilities struct {
-	LQAvailable                  bool     `json:"lq_available"`
-	CoreVersion                  string   `json:"core_version"`
-	SupportsStatusJSON           bool     `json:"supports_status_json"`
-	SupportsDoctorJSON           bool     `json:"supports_doctor_json"`
-	SupportsForwardList          bool     `json:"supports_forward_list"`
-	SupportsDDNSOverview         bool     `json:"supports_ddns_overview"`
-	EnableTasks                  bool     `json:"enable_tasks"`
-	SupportsSnapshotManualRecord bool     `json:"supports_snapshot_manual_record"`
-	SupportsRollbackManualRecord bool     `json:"supports_rollback_manual_record"`
-	WriteActionsSupported        bool     `json:"write_actions_supported"`
-	SupportedWriteActions        []string `json:"supported_write_actions,omitempty"`
-	AllowedTaskActions           []string `json:"allowed_task_actions,omitempty"`
+	LQAvailable                        bool     `json:"lq_available"`
+	CoreVersion                        string   `json:"core_version"`
+	SupportsStatusJSON                 bool     `json:"supports_status_json"`
+	SupportsDoctorJSON                 bool     `json:"supports_doctor_json"`
+	SupportsForwardList                bool     `json:"supports_forward_list"`
+	SupportsDDNSOverview               bool     `json:"supports_ddns_overview"`
+	EnableTasks                        bool     `json:"enable_tasks"`
+	SupportsSnapshotManualRecord       bool     `json:"supports_snapshot_manual_record"`
+	SupportsRollbackManualRecord       bool     `json:"supports_rollback_manual_record"`
+	WriteActionsSupported              bool     `json:"write_actions_supported"`
+	SupportedWriteActions              []string `json:"supported_write_actions,omitempty"`
+	ControllerMetadataActionsSupported bool     `json:"controller_metadata_actions_supported"`
+	AllowedTaskActions                 []string `json:"allowed_task_actions,omitempty"`
 }
 
 type EntryPayload struct {
@@ -85,10 +87,11 @@ type ForwardPayload struct {
 }
 
 type Task struct {
-	ID     int64  `json:"id"`
-	NodeID string `json:"node_id"`
-	Action string `json:"action"`
-	Status string `json:"status"`
+	ID          int64           `json:"id"`
+	NodeID      string          `json:"node_id"`
+	Action      string          `json:"action"`
+	Status      string          `json:"status"`
+	PayloadJSON json.RawMessage `json:"payload_json,omitempty"`
 }
 
 type TaskResultRequest struct {

@@ -1,45 +1,17 @@
 # Leikwan Toolkit
 
-当前 Core 版本：`1.4.0 LTS`
+Leikwan Toolkit Shell Core is frozen at `1.4.0 LTS`.
 
-Leikwan Toolkit 是一个 **A 公网入口 + B 中转主机 + C 后端目标** 的 TCP/UDP 转发组网工具。
+Leikwan Toolkit is a TCP/UDP forwarding toolkit for an **A public entry + B relay host + C backend target** topology. The Shell Core remains responsible for real forwarding behavior: EasyTier, nftables, DDNS, PBR, snapshots and local maintenance.
 
-1.4.x 是 Shell Core / LTS：负责真实转发、EasyTier、nftables、DDNS、PBR、快照和本机维护。后续只做 bugfix、兼容性修复、安全修复和文档维护。
-
-## 适用场景
-
-典型链路：
-
-```text
-外部客户端 -> A 公网入口 -> EasyTier -> B 利群主机 -> C 后端目标
-```
-
-核心用途：
-
-- 多公网入口接入
-- 中转主机统一转发
-- TCP/UDP 同时转发
-- 可选 PBR 出口策略
-- 可选 DDNS 自动刷新
-- 可选配置备份 / 自更新
-
-不做：
-
-- Web 面板直接修改 Core 配置
-- 多用户权限系统
-- 自动负载均衡控制面
-- 复杂监控平台
-- DNS 服务商完整 SDK
-- 代理协议客户端生成器
-
-## 快速安装
+## Core Quick Start
 
 ```bash
 curl -fsSL -o /tmp/lq-bootstrap.sh https://raw.githubusercontent.com/ike-sh/leikwan-toolkit/main/scripts/bootstrap.sh && bash /tmp/lq-bootstrap.sh
 lq init
 ```
 
-常用 Core 命令：
+Common Core commands:
 
 ```bash
 lq init
@@ -52,52 +24,89 @@ lq update check
 
 ## Leikwan Panel 2.1.0 Stable
 
-Leikwan Panel 2.1.0 是安全控制面稳定版。它提供 Controller / Agent / Web UI，用于观察节点状态、审计人工操作、生成手动执行计划和运行只读诊断任务。
+Leikwan Panel `2.1.0` is the stable safety-control plane. It provides Controller / Agent / Web UI for observation, readonly diagnostics, manual planning and audit metadata.
 
-2.1.0 支持：
+It supports Controller / Agent, node heartbeat, readonly status reports, readonly Tasks, Plan manual execution, Plan dry-run, Snapshot / Rollback metadata, Safety Gate, Action Catalog, Write Action Review, Operator Auth and strict-auth.
 
-- Controller / Agent
-- 节点心跳
-- 只读状态上报
-- 只读 Tasks
-- Task lifecycle
-- Plan manual execution
-- Plan dry-run
-- Snapshot / Rollback metadata
-- Safety Gate
-- Action Catalog
-- Write Action Review
-- Operator Auth
+It does **not** execute write operations, create write tasks, accept command strings, add/delete/modify forwards, switch public entries, restart relay, create snapshots, run rollback, or modify nftables, systemd, EasyTier, DDNS, entries, forwards or PBR.
 
-2.1.0 明确不支持：
+## Leikwan Panel 3.0.0-alpha.1
 
-- 不执行写操作
-- 不自动新增、删除、修改转发
-- 不自动切换公网入口
-- 不自动 restart relay
-- 不自动创建快照
-- 不执行回滚
-- 不接受 command 字符串
-- 不修改 `leikwan-toolkit.sh`
-- 不修改 nftables / systemd / EasyTier / DDNS / entries / forwards / PBR
+`3.0.0-alpha.1` is the first **real apply alpha**. It can install/configure EasyTier, write Panel nftables/PBR/DDNS config, reload Panel firewall rules and queue fixed node actions when an operator explicitly enables `enable_write_actions=true` on that Agent.
 
-推荐部署模型：
+The demo flow is intentionally small:
 
-- Controller 可以部署在独立管理服务器。
-- Agent 部署在 A/B/C 节点。
-- Agent 主动连接 Controller。
-- Controller 挂了不影响已有 Core 转发。
+1. Install Controller.
+2. Open Web Panel.
+3. Unlock with Operator token.
+4. Add Agent nodes from the Bootstrap page.
+5. Create a Network profile.
+6. Create an Entry.
+7. Create a Forward.
+8. Apply.
+9. Watch Tasks.
 
-Token 区分：
+Controller one-click install:
 
-- `LEIKWAN_CONTROLLER_TOKEN` 给 Agent 使用。
-- `LEIKWAN_OPERATOR_TOKEN` 给 Web / Operator API 使用。
+```bash
+curl -fsSL https://raw.githubusercontent.com/ike-sh/leikwan-toolkit/main/panel/scripts/install-controller.sh | bash
+```
 
-未来 2.2.0 以后才考虑极少量白名单写操作实验，并且必须建立在 dry-run、approval、snapshot、rollback、verification 和审计链路之上。
+Agent one-click join:
 
-## Panel 本地运行
+```text
+Copy the command from Web Panel -> Bootstrap / Add Agent.
+```
 
-Controller：
+Alpha write actions are fixed allowlisted actions only:
+
+- `configure_node_role`
+- `apply_network_profile`
+- `apply_entry_config`
+- `apply_forward_config`
+- `reload_leikwan_core`
+- `verify_applied_config`
+- `install_easytier`
+- `configure_easytier_network`
+- `start_easytier`
+- `restart_easytier`
+- `stop_easytier`
+- `apply_entry_ports`
+- `apply_forward_rules`
+- `apply_pbr_rules`
+- `apply_ddns_config`
+- `ddns_sync_now`
+- `reload_firewall_rules`
+- `restart_agent`
+- `reboot_node`
+
+They do not accept command strings, do not run `shell -c`, do not run `bash -c`, do not run `eval`, and do not expose raw nft / iptables / ip route operations. Panel writes only under its own managed paths such as `/etc/leikwan-agent/`, `/etc/systemd/system/leikwan-easytier.service`, `/var/backups/leikwan-panel-agent/` and uses fixed argv for `systemctl`, `nft`, `ip` and `reboot`. The landing/backend machine does **not** need an Agent; it is configured as `target_host:target_port`.
+
+Still disabled or blocked:
+
+- `create_entry`
+- `create_forward`
+- `switch_entry`
+- `rollback_config`
+- `restart_relay`
+- arbitrary commands
+- raw shell
+- raw nft / iptables / ip route
+
+## Deployment Model
+
+- Controller can run on a dedicated management host.
+- Agents run on A public entry and B relay nodes.
+- C backend/landing machines do not need Agents.
+- Agents connect outward to Controller.
+- Controller outage does not affect existing Core forwarding.
+- `LEIKWAN_CONTROLLER_TOKEN` is for Agents.
+- `LEIKWAN_OPERATOR_TOKEN` is for Web / Operator APIs.
+- Agent token and Operator token are intentionally not interchangeable.
+
+## Panel Local Development
+
+Controller:
 
 ```bash
 cd panel/controller
@@ -105,7 +114,7 @@ go test ./...
 go run ./cmd/leikwan-controller --listen 127.0.0.1:18080 --db ./data/controller.db
 ```
 
-Agent：
+Agent:
 
 ```bash
 cd panel/agent
@@ -113,7 +122,7 @@ go test ./...
 go run ./cmd/leikwan-agent --config ./agent.yml --once
 ```
 
-Web：
+Web:
 
 ```bash
 cd panel/controller
@@ -121,13 +130,13 @@ npm --prefix web install
 npm --prefix web run build
 ```
 
-发布包：
+Panel release package:
 
 ```bash
 bash panel/scripts/build-release.sh
 ```
 
-输出：
+Output:
 
 ```text
 panel/dist/leikwan-controller
@@ -135,47 +144,21 @@ panel/dist/leikwan-agent
 panel/dist/web/
 panel/dist/docs/
 panel/dist/examples/
+panel/dist/scripts/
 panel/dist/SHA256SUMS
 ```
 
-## 文档索引
-
-Core 文档：
-
-- [最终使用手册](docs/final-guide.md)
-- [CLI 参考](docs/cli.md)
-- [组网流程](docs/workflow.md)
-- [DDNS](docs/ddns-refresh.md)
-- [安全说明](docs/security.md)
-- [故障排查](docs/troubleshooting.md)
-- [验收测试](docs/acceptance-test.md)
-
-Panel 文档：
+## Docs
 
 - [Panel 2.1.0 Release Notes](panel/docs/release-2.1.0.md)
+- [Panel 3.0 Alpha Notes](panel/docs/release-3.0-alpha.md)
+- [Quick Start](panel/docs/quickstart.md)
+- [One-click Install](panel/docs/one-click-install.md)
+- [Agent Join](panel/docs/agent-join.md)
+- [Network / Forwarding](panel/docs/network-forwarding.md)
+- [PBR](panel/docs/pbr.md)
+- [DDNS](panel/docs/ddns.md)
+- [Security](panel/docs/security.md)
 - [Operator Auth](panel/docs/operator-auth.md)
-- [Agent Protocol](panel/docs/agent-protocol.md)
-- [Readonly Tasks](panel/docs/tasks-alpha.md)
-- [Task Lifecycle](panel/docs/task-lifecycle.md)
-- [Plan Dry-run](panel/docs/dry-run-alpha.md)
-- [Plans](panel/docs/plans-beta.md)
-- [Manual Execution](panel/docs/manual-execution.md)
-- [Snapshot / Rollback Metadata](panel/docs/snapshot-rollback-beta.md)
-- [Safety Gate](panel/docs/safety-gate.md)
 - [Action Catalog](panel/docs/action-catalog.md)
-- [Write Action Review](panel/docs/write-action-review.md)
-- [Capabilities](panel/docs/capabilities.md)
-- [Controller 安装](panel/docs/install-controller.md)
-- [Agent 安装](panel/docs/install-agent.md)
-- [systemd 示例](panel/docs/systemd.md)
-
-## Release
-
-Core release：
-
-```text
-leikwan-toolkit-1.4.0.tar.gz
-leikwan-toolkit-1.4.0.tar.gz.sha256
-```
-
-Panel 2.1.0 release files are generated under `panel/dist/`.
+- [Safety Model](panel/docs/safety-model.md)
