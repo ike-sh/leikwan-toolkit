@@ -30,9 +30,9 @@ It supports Controller / Agent, node heartbeat, readonly status reports, readonl
 
 It does **not** execute write operations, create write tasks, accept command strings, add/delete/modify forwards, switch public entries, restart relay, create snapshots, run rollback, or modify nftables, systemd, EasyTier, DDNS, entries, forwards or PBR.
 
-## Leikwan Panel 3.0.0-alpha.1
+## Leikwan Panel 3.0.0-alpha.2
 
-`3.0.0-alpha.1` is the first **real apply alpha**. It can install/configure EasyTier, write Panel nftables/PBR/DDNS config, reload Panel firewall rules and queue fixed node actions when an operator explicitly enables `enable_write_actions=true` on that Agent.
+`3.0.0-alpha.2` is the first **real apply alpha**. It can install/configure EasyTier, write Panel nftables/PBR/DDNS config, reload Panel firewall rules and queue fixed node actions when an operator explicitly enables `enable_write_actions=true` on that Agent.
 
 The demo flow is intentionally small:
 
@@ -49,13 +49,23 @@ The demo flow is intentionally small:
 Controller one-click install:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/ike-sh/leikwan-toolkit/main/panel/scripts/install-controller.sh | bash
+curl -fsSL https://raw.githubusercontent.com/ike-sh/leikwan-toolkit/main/panel/scripts/install-controller.sh | sudo bash
 ```
+
+If the GitHub Release asset has not been uploaded yet, the installer automatically falls back to building from the GitHub source tarball.
 
 Agent one-click join:
 
-```text
-Copy the command from Web Panel -> Bootstrap / Add Agent.
+Open Web Panel -> Add Agent, choose the node role and copy the generated command. A full command looks like:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/ike-sh/leikwan-toolkit/main/panel/scripts/install-agent.sh | sudo bash -s -- \
+  --controller-url http://PANEL_HOST:18080 \
+  --token AGENT_TOKEN \
+  --node-name relay-1 \
+  --role relay \
+  --enable-tasks \
+  --enable-write-actions
 ```
 
 Alpha write actions are fixed allowlisted actions only:

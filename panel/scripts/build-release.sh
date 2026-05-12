@@ -1,10 +1,15 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-ROOT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
+SCRIPT_SOURCE="${BASH_SOURCE[0]:-}"
+if [[ -n "${SCRIPT_SOURCE}" && -f "${SCRIPT_SOURCE}" ]]; then
+  ROOT_DIR="$(cd -- "$(dirname -- "${SCRIPT_SOURCE}")/../.." && pwd)"
+else
+  ROOT_DIR="$(pwd)"
+fi
 PANEL_DIR="${ROOT_DIR}/panel"
 DIST_DIR="${PANEL_DIR}/dist"
-PANEL_VERSION="${PANEL_VERSION:-3.0.0-alpha.1}"
+PANEL_VERSION="${PANEL_VERSION:-3.0.0-alpha.2}"
 CONTROLLER_GOCACHE="${PANEL_DIR}/controller/.gocache"
 AGENT_GOCACHE="${PANEL_DIR}/agent/.gocache"
 
@@ -25,11 +30,6 @@ if [[ -z "${GO_BIN}" ]]; then
   exit 1
 fi
 
-mkdir -p "${CONTROLLER_GOCACHE}" "${AGENT_GOCACHE}"
-
-GOOS_VALUE="${GOOS:-$("${GO_BIN}" env GOOS)}"
-GOARCH_VALUE="${GOARCH:-$("${GO_BIN}" env GOARCH)}"
-
 NPM_BIN="${NPM_BIN:-}"
 if [[ -z "${NPM_BIN}" ]] && command -v npm >/dev/null 2>&1; then
   NPM_BIN="$(command -v npm)"
@@ -47,7 +47,11 @@ if [[ -z "${NPM_BIN}" ]]; then
   exit 1
 fi
 
-mkdir -p "${DIST_DIR}"
+mkdir -p "${DIST_DIR}" "${CONTROLLER_GOCACHE}" "${AGENT_GOCACHE}"
+
+GOOS_VALUE="${GOOS:-linux}"
+GOARCH_VALUE="${GOARCH:-amd64}"
+TARBALL="leikwan-panel-${PANEL_VERSION}-${GOOS_VALUE}-${GOARCH_VALUE}.tar.gz"
 
 echo "[INFO] Building controller for ${GOOS_VALUE}/${GOARCH_VALUE}"
 (
@@ -77,6 +81,13 @@ install -m 0755 "${PANEL_DIR}/scripts/install-controller.sh" "${DIST_DIR}/script
 install -m 0755 "${PANEL_DIR}/scripts/install-agent.sh" "${DIST_DIR}/scripts/install-agent.sh"
 printf 'LEIKWAN_PANEL_VERSION=%s\n' "${PANEL_VERSION}" >"${DIST_DIR}/VERSION"
 
+rm -f "${DIST_DIR}"/*.tar.gz "${DIST_DIR}/SHA256SUMS"
+echo "[INFO] Creating ${TARBALL}"
+(
+  cd "${DIST_DIR}"
+  tar -czf "${TARBALL}" leikwan-controller leikwan-agent web docs examples scripts VERSION
+)
+
 echo "[INFO] Writing SHA256SUMS"
 (
   cd "${DIST_DIR}"
@@ -84,3 +95,5 @@ echo "[INFO] Writing SHA256SUMS"
 )
 
 echo "[OK] Panel release files written to ${DIST_DIR}"
+echo "[OK] GitHub Release asset to upload: ${DIST_DIR}/${TARBALL}"
+echo "[OK] Suggested release tags: v${PANEL_VERSION} or panel-${PANEL_VERSION}"

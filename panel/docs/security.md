@@ -1,6 +1,6 @@
 # Security
 
-Leikwan Panel `3.0.0-alpha.1` is an alpha apply release with strict boundaries:
+Leikwan Panel `3.0.0-alpha.2` is an alpha apply release with strict boundaries:
 
 - Operator token is required for mutating Web APIs.
 - Agent token is only for Agent register/report/task APIs.

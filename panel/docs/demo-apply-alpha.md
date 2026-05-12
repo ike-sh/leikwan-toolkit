@@ -1,6 +1,6 @@
 # Demo Apply Alpha
 
-`3.0.0-alpha.1` is the first release that can ask a write-enabled Agent to do a tiny set of fixed actions. This is a demo path for validating install and basic Panel workflow.
+`3.0.0-alpha.2` is the first release that can ask a write-enabled Agent to do a tiny set of fixed actions. This is a demo path for validating install and basic Panel workflow.
 
 ## What It Can Do
 

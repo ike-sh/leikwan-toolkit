@@ -1,6 +1,6 @@
 # Safety Gate
 
-Leikwan Panel `3.0.0-alpha.1` adds a Safety Gate for Plans.
+Leikwan Panel `3.0.0-alpha.2` adds a Safety Gate for Plans.
 
 Safety Gate is a Controller-side readiness report. It is not execution permission, and it does not make the Agent run anything.
 
@@ -53,13 +53,13 @@ Safety Gate does not:
 - edit nftables, systemd, EasyTier, DDNS, entries, forwards or PBR
 - send command strings to Agents
 
-`3.0.0-alpha.1` adds Write Action Review as another Controller-side design check. The review can explain which gates a future write action would need, but it never releases execution.
+`3.0.0-alpha.2` adds Write Action Review as another Controller-side design check. The review can explain which gates a future write action would need, but it never releases execution.
 
 Future `2.2` work may consider a tiny write allowlist, but only with dry-run, snapshot, rollback, approval and audit requirements in place.
 ## Alpha Boundary
 
-In 3.0.0-alpha.1, Safety Gate is an audit and readiness view only. It never grants write execution permission.
+In 3.0.0-alpha.2, Safety Gate is an audit and readiness view only. It never grants write execution permission.
 
 ## Metadata-only Readiness
 
-3.0.0-alpha.1 Safety Gate also reports `metadata_actions_ready`, `evidence_count`, `manual_execution_recorded`, and `manual_verification_recorded`. These fields help audit manual work; they do not permit node writes.
+3.0.0-alpha.2 Safety Gate also reports `metadata_actions_ready`, `evidence_count`, `manual_execution_recorded`, and `manual_verification_recorded`. These fields help audit manual work; they do not permit node writes.

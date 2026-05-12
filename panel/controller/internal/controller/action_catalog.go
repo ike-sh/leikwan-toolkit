@@ -7,7 +7,7 @@ import (
 	"strings"
 )
 
-const writeExecutionDisabledReason = "node write execution is limited to fixed 3.0.0-alpha.1 allowlisted actions; arbitrary command dispatch remains disabled"
+const writeExecutionDisabledReason = "node write execution is limited to fixed 3.0.0-alpha.2 allowlisted actions; arbitrary command dispatch remains disabled"
 
 func actionCatalogDefinitions() []ActionDefinition {
 	readonlyCaps := []string{"lq --version", "lq status", "lq doctor"}
@@ -88,7 +88,7 @@ func actionCatalogDefinitions() []ActionDefinition {
 			Title:                 "Create public entry",
 			Category:              "future_write_guarded",
 			RiskLevel:             "high",
-			Description:           "Future guarded write action for adding a public entry. Disabled in 3.0.0-alpha.1; Web apply uses fixed lower-level actions instead.",
+			Description:           "Future guarded write action for adding a public entry. Disabled in 3.0.0-alpha.2; Web apply uses fixed lower-level actions instead.",
 			RequiredGates:         append([]string(nil), futureBaseGates...),
 			RequiredCapabilities:  append([]string(nil), readonlyCaps...),
 			RollbackRequired:      true,
@@ -103,7 +103,7 @@ func actionCatalogDefinitions() []ActionDefinition {
 			Title:                 "Create forward target",
 			Category:              "future_write_guarded",
 			RiskLevel:             "medium",
-			Description:           "Future guarded write action for adding a forward target. Disabled in 3.0.0-alpha.1; Web apply uses fixed lower-level actions instead.",
+			Description:           "Future guarded write action for adding a forward target. Disabled in 3.0.0-alpha.2; Web apply uses fixed lower-level actions instead.",
 			RequiredGates:         append([]string(nil), futureBaseGates...),
 			RequiredCapabilities:  []string{"lq status", "lq doctor", "lq forward list"},
 			RollbackRequired:      true,
@@ -118,7 +118,7 @@ func actionCatalogDefinitions() []ActionDefinition {
 			Title:                 "Switch primary entry",
 			Category:              "future_write_dangerous",
 			RiskLevel:             "critical",
-			Description:           "Future dangerous write action for changing PRIMARY/BACKUP entry state. Disabled in 3.0.0-alpha.1.",
+			Description:           "Future dangerous write action for changing PRIMARY/BACKUP entry state. Disabled in 3.0.0-alpha.2.",
 			RequiredGates:         append([]string(nil), futureBaseGates...),
 			RequiredCapabilities:  []string{"lq status", "lq doctor", "lq forward list", "lq ddns overview"},
 			RollbackRequired:      true,
@@ -133,7 +133,7 @@ func actionCatalogDefinitions() []ActionDefinition {
 			Title:                 "Update DDNS config",
 			Category:              "future_write_low",
 			RiskLevel:             "medium",
-			Description:           "Future guarded write action for changing DDNS configuration. Disabled in 3.0.0-alpha.1.",
+			Description:           "Future guarded write action for changing DDNS configuration. Disabled in 3.0.0-alpha.2.",
 			RequiredGates:         append([]string(nil), futureBaseGates...),
 			RequiredCapabilities:  []string{"lq ddns overview", "lq doctor"},
 			RollbackRequired:      true,
@@ -148,7 +148,7 @@ func actionCatalogDefinitions() []ActionDefinition {
 			Title:                 "Rollback configuration",
 			Category:              "future_write_dangerous",
 			RiskLevel:             "critical",
-			Description:           "Future dangerous action for restoring prior configuration. Disabled in 3.0.0-alpha.1.",
+			Description:           "Future dangerous action for restoring prior configuration. Disabled in 3.0.0-alpha.2.",
 			RequiredGates:         []string{"dry-run", "approval", "snapshot", "rollback", "verification"},
 			RequiredCapabilities:  readonlyCaps,
 			RollbackRequired:      true,
@@ -163,7 +163,7 @@ func actionCatalogDefinitions() []ActionDefinition {
 			Title:                 "Restart relay",
 			Category:              "future_write_dangerous",
 			RiskLevel:             "high",
-			Description:           "Future dangerous action for restarting EasyTier relay. Disabled in 3.0.0-alpha.1.",
+			Description:           "Future dangerous action for restarting EasyTier relay. Disabled in 3.0.0-alpha.2.",
 			RequiredGates:         []string{"dry-run", "approval", "snapshot", "rollback", "verification", "maintenance-window"},
 			RequiredCapabilities:  readonlyCaps,
 			RollbackRequired:      true,

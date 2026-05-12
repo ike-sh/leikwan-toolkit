@@ -2,7 +2,7 @@ package controller
 
 import "encoding/json"
 
-const Version = "3.0.0-alpha.1"
+const Version = "3.0.0-alpha.2"
 
 type HealthResponse struct {
 	Name    string `json:"name"`
@@ -14,6 +14,7 @@ type ServerOptions struct {
 	AgentToken    string
 	OperatorToken string
 	StrictAuth    bool
+	WebDir        string
 }
 
 type AuthStatusResponse struct {

@@ -1,6 +1,6 @@
 # Network / Entry / Forward
 
-`3.0.0-alpha.1` keeps the model intentionally small:
+`3.0.0-alpha.2` keeps the model intentionally small:
 
 - Network: EasyTier network metadata and relay node.
 - Entry: public entry node, relay node and TCP/UDP port range.

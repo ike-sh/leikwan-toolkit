@@ -14,7 +14,7 @@ Leikwan Panel separates Agent auth from Operator auth.
 
 With `--strict-auth`, every non-health Web API also requires Operator token. Agent APIs still require the Agent token and do not accept Operator token.
 
-## 3.0.0-alpha.1 Demo Apply APIs
+## 3.0.0-alpha.2 Demo Apply APIs
 
 These APIs are Operator-protected:
 

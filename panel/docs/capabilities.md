@@ -1,6 +1,6 @@
 # Capabilities
 
-Leikwan Panel `3.0.0-alpha.1` uses capabilities to decide what can be requested from a node.
+Leikwan Panel `3.0.0-alpha.2` uses capabilities to decide what can be requested from a node.
 
 ## Readonly Capabilities
 

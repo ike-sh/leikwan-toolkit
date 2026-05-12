@@ -17,6 +17,7 @@ func main() {
 	tokenFlag := flag.String("token", "", "controller bearer token")
 	operatorTokenFlag := flag.String("operator-token", "", "operator bearer token for mutating Panel APIs")
 	strictAuthFlag := flag.Bool("strict-auth", false, "require operator token for all non-health non-agent APIs")
+	webDirFlag := flag.String("web-dir", "", "directory containing built web assets")
 	configPath := flag.String("config", "", "optional controller config path")
 	flag.Parse()
 
@@ -41,6 +42,16 @@ func main() {
 		log.Print("[WARN] LEIKWAN_OPERATOR_TOKEN is empty; mutating operator APIs will return 403")
 	}
 	strictAuth := *strictAuthFlag || strings.EqualFold(os.Getenv("LEIKWAN_STRICT_AUTH"), "true") || strings.EqualFold(configValue(*configPath, "strict_auth"), "true")
+	webDir := *webDirFlag
+	if webDir == "" {
+		webDir = os.Getenv("LEIKWAN_WEB_DIR")
+	}
+	if webDir == "" {
+		webDir = configValue(*configPath, "web_dir")
+	}
+	if webDir == "" {
+		webDir = "/var/lib/leikwan-panel/web"
+	}
 
 	store, err := controller.OpenStore(*dbPath)
 	if err != nil {
@@ -52,6 +63,7 @@ func main() {
 		AgentToken:    token,
 		OperatorToken: operatorToken,
 		StrictAuth:    strictAuth,
+		WebDir:        webDir,
 	}, log.Default())
 	log.Printf("leikwan-controller %s listening on %s", controller.Version, *listen)
 	if err := http.ListenAndServe(*listen, srv); err != nil {

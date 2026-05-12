@@ -4,7 +4,7 @@ import './styles.css';
 
 const API_BASE = import.meta.env.VITE_API_BASE || '';
 const tabs = ['Login', 'Dashboard', 'Topology', 'Nodes', 'Network', 'Entries', 'Forwards', 'PBR', 'DDNS', 'Events', 'Plans', 'Tasks', 'Capabilities', 'Action Catalog', 'Bootstrap', 'Settings'];
-const PANEL_VERSION = '3.0.0-alpha.1';
+const PANEL_VERSION = '3.0.0-alpha.2';
 
 function getOperatorToken() {
   try {
@@ -137,7 +137,7 @@ function App() {
         </header>
         <AuthBar authStatus={authStatus} token={operatorToken} onToken={updateOperatorToken} />
         {data.error && <div className="banner">API request failed: {data.error}</div>}
-        <div className="notice">3.0.0-alpha.1 is a real apply alpha. Write-enabled Agents can run fixed EasyTier, nftables, PBR, DDNS and node lifecycle actions; the API still never accepts command strings or raw shell.</div>
+        <div className="notice">3.0.0-alpha.2 is a real apply alpha. Write-enabled Agents can run fixed EasyTier, nftables, PBR, DDNS and node lifecycle actions; the API still never accepts command strings or raw shell.</div>
         {active === 'Login' && <LoginPanel token={operatorToken} onToken={updateOperatorToken} />}
         {active === 'Dashboard' && <Dashboard data={data} counts={counts} onNavigate={navigate} />}
         {active === 'Topology' && <Topology />}
@@ -253,7 +253,7 @@ function Settings({ authStatus }) {
         strict_auth: String(Boolean(authStatus.strict_auth)),
         agent_auth_configured: String(Boolean(authStatus.agent_auth_configured))
       }} />
-      <p className="muted">3.0.0-alpha.1 keeps Shell Core independent. Web actions create fixed Agent tasks only; arbitrary command strings remain blocked.</p>
+      <p className="muted">3.0.0-alpha.2 keeps Shell Core independent. Web actions create fixed Agent tasks only; arbitrary command strings remain blocked.</p>
     </section>
   );
 }
@@ -582,7 +582,7 @@ function Plans({ nodes }) {
       {error && <div className="banner">Plans request failed: {error}</div>}
       <section className="panel">
         <h3>Create Plan</h3>
-        <p className="muted">Plans remain manual-first. 3.0.0-alpha.1 demo apply uses fixed alpha task actions only; no user-provided command strings are accepted.</p>
+        <p className="muted">Plans remain manual-first. 3.0.0-alpha.2 demo apply uses fixed alpha task actions only; no user-provided command strings are accepted.</p>
         <form className="form-grid plan-form" onSubmit={createPlan}>
           <label>Type<select value={form.type} onChange={(e) => update('type', e.target.value)}>
             {['create_entry', 'create_forward', 'switch_entry', 'ddns_check'].map((type) => <option key={type} value={type}>{type}</option>)}
@@ -1062,7 +1062,7 @@ function DryRun({ plan, onStart, onRefresh }) {
 function SnapshotRollback({ plan, snapshot, rollback, setSnapshot, setRollback, onSnapshot, onRollback }) {
   return (
     <div className="snapshot-rollback">
-      <p className="muted">3.0.0-alpha.1 records manual snapshot and rollback information. Demo apply does not create snapshots or run rollback.</p>
+      <p className="muted">3.0.0-alpha.2 records manual snapshot and rollback information. Demo apply does not create snapshots or run rollback.</p>
       <div className="kv">
         <span>Snapshot policy</span><strong>{plan.snapshot_policy || 'recommended'}</strong>
         <span>Snapshot status</span><strong><span className={`tag ${plan.snapshot_status}`}>{plan.snapshot_status || 'missing'}</span></strong>
@@ -1136,7 +1136,7 @@ function ActionReview({ review, plan, onRefresh }) {
   };
   return (
     <div className="action-review">
-      <p className="muted">3.0.0-alpha.1 reviews future node writes separately from demo apply. The review does not generate command strings or bypass safety gates.</p>
+      <p className="muted">3.0.0-alpha.2 reviews future node writes separately from demo apply. The review does not generate command strings or bypass safety gates.</p>
       <div className="kv">
         <span>Matched action</span><strong>{value.matched_action}</strong>
         <span>Category</span><strong><span className={`tag ${value.category}`}>{value.category}</span></strong>
@@ -1214,7 +1214,7 @@ function Tasks({ nodes, onNavigate }) {
       {error && <div className="banner">Tasks request failed: {error}</div>}
       <section className="panel">
         <h3>Create Readonly Task</h3>
-        <p className="muted">3.0.0-alpha.1 queues builtin readonly actions here. Demo apply pages create alpha write tasks automatically for write-enabled Agents; the API never accepts command strings.</p>
+        <p className="muted">3.0.0-alpha.2 queues builtin readonly actions here. Demo apply pages create alpha write tasks automatically for write-enabled Agents; the API never accepts command strings.</p>
         <form className="form-grid" onSubmit={createTask}>
           <label>Node<select value={form.node_id} onChange={(e) => setForm((prev) => ({ ...prev, node_id: e.target.value }))}>
             <option value="">Select node</option>
@@ -1448,7 +1448,7 @@ function ActionCatalog() {
     <div className="action-catalog-page">
       <section className="panel">
         <h3>Action Catalog</h3>
-        <p className="muted">3.0.0-alpha.1 enables metadata-only actions and fixed alpha apply actions. High-level future actions such as create_forward, switch_entry, and restart_relay stay disabled.</p>
+        <p className="muted">3.0.0-alpha.2 enables metadata-only actions and fixed alpha apply actions. High-level future actions such as create_forward, switch_entry, and restart_relay stay disabled.</p>
         <Table headers={['Action', 'Category', 'Risk', 'Enabled', 'Node mutation', 'Agent required', 'Command dispatch', 'Operator token', 'Required gates', 'Snapshot', 'Rollback', 'Approval', 'Description']}>
           {(catalog.actions || []).map((action) => (
             <tr key={action.action}>

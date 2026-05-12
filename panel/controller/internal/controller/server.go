@@ -8,6 +8,8 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 )
@@ -17,6 +19,7 @@ type Server struct {
 	agentToken    string
 	operatorToken string
 	strictAuth    bool
+	webDir        string
 	log           *log.Logger
 }
 
@@ -28,7 +31,7 @@ func NewServerWithAuth(store *Store, opts ServerOptions, logger *log.Logger) htt
 	if logger == nil {
 		logger = log.Default()
 	}
-	s := &Server{store: store, agentToken: opts.AgentToken, operatorToken: opts.OperatorToken, strictAuth: opts.StrictAuth, log: logger}
+	s := &Server{store: store, agentToken: opts.AgentToken, operatorToken: opts.OperatorToken, strictAuth: opts.StrictAuth, webDir: opts.WebDir, log: logger}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/v1/health", s.handleHealth)
 	mux.HandleFunc("/api/v1/login", s.handleLogin)
@@ -64,7 +67,35 @@ func NewServerWithAuth(store *Store, opts ServerOptions, logger *log.Logger) htt
 	mux.HandleFunc("/api/v1/ddns-profiles", s.handleDDNSProfiles)
 	mux.HandleFunc("/api/v1/ddns-profiles/", s.handleDDNSProfileByID)
 	mux.HandleFunc("/api/v1/events", s.handleEvents)
-	return withCORS(s.withReadAuth(mux))
+	apiHandler := withCORS(s.withReadAuth(mux))
+	if strings.TrimSpace(opts.WebDir) != "" {
+		return s.withWeb(apiHandler)
+	}
+	return apiHandler
+}
+
+func (s *Server) withWeb(api http.Handler) http.Handler {
+	webDir := strings.TrimSpace(s.webDir)
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/api/") {
+			api.ServeHTTP(w, r)
+			return
+		}
+		if webDir == "" {
+			http.NotFound(w, r)
+			return
+		}
+		clean := filepath.Clean(strings.TrimPrefix(r.URL.Path, "/"))
+		if clean == "." || clean == string(filepath.Separator) {
+			clean = "index.html"
+		}
+		target := filepath.Join(webDir, clean)
+		info, err := os.Stat(target)
+		if err != nil || info.IsDir() {
+			target = filepath.Join(webDir, "index.html")
+		}
+		http.ServeFile(w, r, target)
+	})
 }
 
 func withCORS(next http.Handler) http.Handler {
@@ -259,7 +290,7 @@ func (s *Server) handleCapabilities(w http.ResponseWriter, r *http.Request) {
 			{Command: "lq forward list", Class: "readonly", Note: "Forward inventory"},
 			{Command: "lq ddns overview", Class: "readonly", Note: "DDNS overview"},
 			{Command: "manual TODO steps", Class: "manual", Note: "Operator performs interactive Core menu work"},
-			{Command: "readonly allowlisted tasks", Class: "readonly", Note: "3.0.0-alpha.1 Agent tasks map actions to fixed argv only"},
+			{Command: "readonly allowlisted tasks", Class: "readonly", Note: "3.0.0-alpha.2 Agent tasks map actions to fixed argv only"},
 			{Command: "alpha demo write actions", Class: "manual", Note: "Only fixed Agent handlers can stage Panel-managed JSON when enable_write_actions=true"},
 			{Command: "manual snapshot record", Class: "manual", Note: "Controller records operator-provided snapshot metadata only"},
 			{Command: "manual rollback record", Class: "manual", Note: "Controller records rollback metadata and instructions only"},
@@ -268,7 +299,7 @@ func (s *Server) handleCapabilities(w http.ResponseWriter, r *http.Request) {
 		Blocked:            []string{"rm", "systemctl restart", "systemctl stop", "nft", "iptables", "ip route", "curl | bash", "bash -c", "eval", "write into /etc"},
 		Future:             []string{"write allowlist", "dry-run", "snapshot", "rollback", "operator approval"},
 		SafetyLevels:       []string{"safe", "caution", "dangerous"},
-		TaskSupport:        "3.0.0-alpha.1 supports readonly tasks and demo alpha write actions gated by enable_write_actions=true; no command strings are accepted",
+		TaskSupport:        "3.0.0-alpha.2 supports readonly tasks and demo alpha write actions gated by enable_write_actions=true; no command strings are accepted",
 		AllowedTaskActions: allowedTaskActions(),
 	})
 }
@@ -313,7 +344,7 @@ func (s *Server) handleBootstrapControllerInfo(w http.ResponseWriter, r *http.Re
 		InstallScriptURL:        installScriptURL(),
 		SupportedRoles:          []string{"entry", "relay", "mixed", "unknown"},
 		SupportedInstallMethods: []string{"curl", "wget"},
-		Note:                    "3.0.0-alpha.1 demo apply can stage Panel-managed config files on write-enabled Agent nodes; backend targets are target_host:target_port and do not need an Agent.",
+		Note:                    "3.0.0-alpha.2 demo apply can stage Panel-managed config files on write-enabled Agent nodes; backend targets are target_host:target_port and do not need an Agent.",
 	})
 }
 
@@ -336,7 +367,7 @@ func (s *Server) handleBootstrapAgentToken(w http.ResponseWriter, r *http.Reques
 	writeJSON(w, http.StatusOK, AgentTokenResponse{
 		Token:     RedactString(s.agentToken),
 		TokenMode: "controller-agent-token",
-		Warnings:  []string{"3.0.0-alpha.1 reuses the Controller Agent token; one-time join tokens are planned for a later release."},
+		Warnings:  []string{"3.0.0-alpha.2 reuses the Controller Agent token; one-time join tokens are planned for a later release."},
 	})
 }
 
@@ -358,7 +389,7 @@ func (s *Server) writeBootstrapAgentCommand(w http.ResponseWriter, r *http.Reque
 	if full && s.agentToken != "" {
 		token = s.agentToken
 	}
-	masked := buildAgentInstallCommand(method, scriptURL, controllerURL, "REDACTED", nodeName, role, enableTasks, enableWriteActions)
+	masked := buildAgentInstallCommand(method, scriptURL, RedactString(controllerURL), "REDACTED", RedactString(nodeName), role, enableTasks, enableWriteActions)
 	command := masked
 	fullCommand := ""
 	if full {
@@ -437,7 +468,7 @@ func buildAgentInstallCommand(method, scriptURL, controllerURL, token, nodeName,
 }
 
 func shellQuote(s string) string {
-	return strings.ReplaceAll(RedactString(s), "'", "'\\''")
+	return strings.ReplaceAll(s, "'", "'\\''")
 }
 
 func (s *Server) handleTopology(w http.ResponseWriter, r *http.Request) {

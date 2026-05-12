@@ -1,6 +1,6 @@
 # Write Action Review
 
-Leikwan Panel `3.0.0-alpha.1` adds a write action review framework. It does not execute write actions.
+Leikwan Panel `3.0.0-alpha.2` adds a write action review framework. It does not execute write actions.
 
 ## What It Does
 
@@ -14,10 +14,10 @@ Action Review maps a Plan type to a future write action and reports:
 - whether the action is enabled
 - why future execution is not available
 
-`ready_for_future_execution` is always `false` in `3.0.0-alpha.1`.
+`ready_for_future_execution` is always `false` in `3.0.0-alpha.2`.
 
 ```text
-write execution is disabled in 3.0.0-alpha.1
+write execution is disabled in 3.0.0-alpha.2
 ```
 
 ## APIs
@@ -69,7 +69,7 @@ Future write actions can require:
 - verification
 - maintenance-window
 
-These gates are visible for review, but passing them does not enable write execution in 3.0.0-alpha.1.
+These gates are visible for review, but passing them does not enable write execution in 3.0.0-alpha.2.
 
 ## Safety Boundary
 
@@ -77,4 +77,4 @@ Before any future write support exists, it must still satisfy dry-run, approval,
 
 ## Metadata-only Action Review
 
-3.0.0-alpha.1 treats metadata-only actions as enabled low-risk Controller actions with `node_mutation=false`, `agent_required=false`, and `command_dispatch=false`. Real node-mutating actions such as `create_forward`, `switch_entry`, and `restart_relay` remain disabled/future. Blocked actions remain permanently disabled.
+3.0.0-alpha.2 treats metadata-only actions as enabled low-risk Controller actions with `node_mutation=false`, `agent_required=false`, and `command_dispatch=false`. Real node-mutating actions such as `create_forward`, `switch_entry`, and `restart_relay` remain disabled/future. Blocked actions remain permanently disabled.

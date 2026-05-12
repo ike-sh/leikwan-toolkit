@@ -1,6 +1,6 @@
 # Leikwan Panel systemd 示例
 
-��ҳ�ṩ Leikwan Panel 3.0.0-alpha.1 �� systemd �ݰ���3.0.0-alpha.1 �����Զ�ִ�����ñ���������޸�?Leikwan Core �� nftables��systemd��EasyTier��DDNS �� TSV ���á�
+��ҳ�ṩ Leikwan Panel 3.0.0-alpha.2 �� systemd �ݰ���3.0.0-alpha.2 �����Զ�ִ�����ñ���������޸�?Leikwan Core �� nftables��systemd��EasyTier��DDNS �� TSV ���á�
 ## Controller 配置路径
 
 建议路径�?
@@ -104,7 +104,7 @@ journalctl -u leikwan-agent.service -n 100 --no-pager
 ```
 
 日志中不应出�?token、secret、password、privateKey、custom_url、custom_cmd �?Authorization 明文�?
-## 3.0.0-alpha.1 Operator Token Example
+## 3.0.0-alpha.2 Operator Token Example
 
 `/etc/leikwan-panel/controller.env` can contain both tokens:
 

@@ -1,6 +1,6 @@
 # Metadata-only Actions Alpha
 
-Leikwan Panel `3.0.0-alpha.1` enables a very small set of Controller-only metadata actions. These actions update the Controller database for audit and operator workflow only.
+Leikwan Panel `3.0.0-alpha.2` enables a very small set of Controller-only metadata actions. These actions update the Controller database for audit and operator workflow only.
 
 They do not modify nodes, do not create Agent tasks, do not execute commands, do not create snapshots, do not run rollback, and do not change Leikwan Core configuration.
 

@@ -1,6 +1,6 @@
 # Safety Model
 
-Leikwan Panel `3.0.0-alpha.1` is a demo apply release with a narrow write boundary.
+Leikwan Panel `3.0.0-alpha.2` is a demo apply release with a narrow write boundary.
 
 ## Still Forbidden
 
@@ -16,7 +16,7 @@ Metadata actions update only Controller DB audit state.
 
 ## Demo Alpha Write Actions
 
-`3.0.0-alpha.1` enables fixed alpha actions only when an Agent has `enable_write_actions=true`:
+`3.0.0-alpha.2` enables fixed alpha actions only when an Agent has `enable_write_actions=true`:
 
 - `configure_node_role`
 - `apply_network_profile`

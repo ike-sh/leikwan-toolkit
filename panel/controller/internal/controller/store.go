@@ -1537,7 +1537,7 @@ func networkApplyPayload(profile NetworkProfile) json.RawMessage {
 		"network_name":   profile.NetworkName,
 		"network_secret": "REDACTED",
 		"relay_node_id":  profile.RelayNodeID,
-		"alpha":          "3.0.0-alpha.1",
+		"alpha":          "3.0.0-alpha.2",
 	})
 }
 
@@ -1548,7 +1548,7 @@ func entryApplyPayload(entry PanelEntry, profile NetworkProfile) json.RawMessage
 		"network_id":         profile.ID,
 		"network_name":       profile.NetworkName,
 		"network_secret":     "REDACTED",
-		"alpha":              "3.0.0-alpha.1",
+		"alpha":              "3.0.0-alpha.2",
 		"panel_managed_only": true,
 	})
 }
@@ -1561,7 +1561,7 @@ func forwardApplyPayload(forward PanelForward, entry PanelEntry, profile Network
 		"network_id":         profile.ID,
 		"network_name":       profile.NetworkName,
 		"network_secret":     "REDACTED",
-		"alpha":              "3.0.0-alpha.1",
+		"alpha":              "3.0.0-alpha.2",
 		"panel_managed_only": true,
 		"target_note":        "backend/landing machine is target_host:target_port and does not need an Agent",
 	})

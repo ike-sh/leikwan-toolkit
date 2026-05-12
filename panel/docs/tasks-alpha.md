@@ -1,6 +1,6 @@
 # Readonly Tasks
 
-Leikwan Panel `3.0.0-alpha.1` hardens the minimal Agent task system for readonly diagnostics.
+Leikwan Panel `3.0.0-alpha.2` hardens the minimal Agent task system for readonly diagnostics.
 
 ## Scope
 
@@ -105,11 +105,11 @@ Agent endpoints require `Authorization: Bearer <token>`.
 
 ## Future Write Automation
 
-Future write operations would require dry-run, snapshot, rollback, approval, strict write allowlists and audit trails. They are not part of 3.0.0-alpha.1.
+Future write operations would require dry-run, snapshot, rollback, approval, strict write allowlists and audit trails. They are not part of 3.0.0-alpha.2.
 
-## 3.0.0-alpha.1 Snapshot / Rollback Safety Framework
+## 3.0.0-alpha.2 Snapshot / Rollback Safety Framework
 
-Leikwan Panel 3.0.0-alpha.1 adds Plan fields for manual snapshot and rollback metadata plus Safety Gate and verification APIs. The Controller only records operator-provided references and notes. It does not create snapshots, roll back nodes, restart services, or modify Core configuration.
+Leikwan Panel 3.0.0-alpha.2 adds Plan fields for manual snapshot and rollback metadata plus Safety Gate and verification APIs. The Controller only records operator-provided references and notes. It does not create snapshots, roll back nodes, restart services, or modify Core configuration.
 
 New Plan APIs:
 
@@ -122,7 +122,7 @@ POST /api/v1/plans/:id/verify
 
 See `snapshot-rollback-beta.md` and `safety-gate.md`.
 
-## 3.0.0-alpha.1 Write Review Boundary
+## 3.0.0-alpha.2 Write Review Boundary
 
 Tasks remain readonly. Action Catalog and Action Review do not add task actions and do not allow write execution.
 
@@ -150,4 +150,4 @@ Agents with default config report:
 Any non-readonly action is rejected by the Controller and by the Agent local allowlist unless the Agent was explicitly installed with `enable_write_actions=true`. In that demo mode, only the fixed alpha staging actions documented in `demo-apply-alpha.md` are allowed; no command string is accepted.
 ## Compatibility Note
 
-This document remains under its original filename for link compatibility. The readonly task system described here is part of Leikwan Panel 3.0.0-alpha.1.
+This document remains under its original filename for link compatibility. The readonly task system described here is part of Leikwan Panel 3.0.0-alpha.2.

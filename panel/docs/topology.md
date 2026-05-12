@@ -1,6 +1,6 @@
 # Topology 只读拓扑
 
-Leikwan Panel 3.0.0-alpha.1 保留只读拓扑视图。Plans 虽然可以生成命令、人工执行手册和 preflight，但 Topology 本身不执行任何变更�?
+Leikwan Panel 3.0.0-alpha.2 保留只读拓扑视图。Plans 虽然可以生成命令、人工执行手册和 preflight，但 Topology 本身不执行任何变更�?
 ## API
 
 ```bash
@@ -19,7 +19,7 @@ curl http://127.0.0.1:18080/api/v1/topology
 
 ## 推断规则
 
-3.0.0-alpha.1 不读取远端系统，也不修改任何配置。拓扑只基于 Agent 上报做轻量推断：
+3.0.0-alpha.2 不读取远端系统，也不修改任何配置。拓扑只基于 Agent 上报做轻量推断：
 
 - `entry -> relay`
 - `relay -> target`
@@ -44,4 +44,4 @@ Topology 不做�?
 - 配置下发
 - 任意命令执行
 
-3.0.0-alpha.1 ֻ��������ֻ�������κ�δ��д�����Ա��������Ȩ�ޡ���ƺͿɻع����̡�
+3.0.0-alpha.2 ֻ��������ֻ�������κ�δ��д�����Ա��������Ȩ�ޡ���ƺͿɻع����̡�

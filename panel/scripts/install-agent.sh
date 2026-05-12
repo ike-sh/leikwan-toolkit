@@ -1,15 +1,14 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-VERSION="3.0.0-alpha.1"
+VERSION="3.0.0-alpha.2"
 CONTROLLER_URL=""
 TOKEN=""
 NODE_NAME=""
 ROLE="unknown"
 ENABLE_TASKS="true"
 ENABLE_WRITE_ACTIONS="false"
-TEST_ONCE="0"
-INSTALL_URL=""
+RELEASE_URL=""
 CONFIG_DIR="/etc/leikwan-agent"
 CONFIG_FILE="${CONFIG_DIR}/config.yml"
 STATE_DIR="/var/lib/leikwan-agent"
@@ -25,15 +24,14 @@ while [[ $# -gt 0 ]]; do
     --enable-tasks) ENABLE_TASKS="true"; shift ;;
     --disable-tasks) ENABLE_TASKS="false"; shift ;;
     --enable-write-actions) ENABLE_WRITE_ACTIONS="true"; shift ;;
-    --test-once) TEST_ONCE="1"; shift ;;
     --version) VERSION="${2:-}"; shift 2 ;;
-    --install-url) INSTALL_URL="${2:-}"; shift 2 ;;
+    --release-url|--install-url) RELEASE_URL="${2:-}"; shift 2 ;;
     *) echo "[FAIL] Unknown argument: $1" >&2; exit 1 ;;
   esac
 done
 
 if [[ ${EUID:-$(id -u)} -ne 0 ]]; then
-  echo "[FAIL] Please run as root." >&2
+  echo "[FAIL] Please run as root or via sudo." >&2
   exit 1
 fi
 if [[ -z "${CONTROLLER_URL}" || -z "${TOKEN}" || -z "${NODE_NAME}" ]]; then
@@ -41,41 +39,142 @@ if [[ -z "${CONTROLLER_URL}" || -z "${TOKEN}" || -z "${NODE_NAME}" ]]; then
   exit 1
 fi
 
-SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-PANEL_DIR="$(cd -- "${SCRIPT_DIR}/.." 2>/dev/null && pwd || true)"
-LOCAL_BIN="${PANEL_DIR}/dist/leikwan-agent"
-if [[ -x "${PANEL_DIR}/leikwan-agent" ]]; then
-  LOCAL_BIN="${PANEL_DIR}/leikwan-agent"
+SCRIPT_SOURCE="${BASH_SOURCE[0]:-}"
+if [[ -n "${SCRIPT_SOURCE}" && -f "${SCRIPT_SOURCE}" ]]; then
+  SCRIPT_DIR="$(cd "$(dirname "${SCRIPT_SOURCE}")" && pwd)"
+else
+  SCRIPT_DIR=""
 fi
 
-if [[ -x "${LOCAL_BIN}" ]]; then
-  install -m 0755 "${LOCAL_BIN}" "${BIN_DST}"
-else
-  TMP_DIR="$(mktemp -d)"
-  trap 'rm -rf "${TMP_DIR}"' EXIT
+download_file() {
+  local url="$1"
+  local out="$2"
+  if command -v curl >/dev/null 2>&1; then
+    curl -fL --retry 2 --connect-timeout 10 "${url}" -o "${out}"
+  elif command -v wget >/dev/null 2>&1; then
+    wget -qO "${out}" "${url}"
+  else
+    echo "[FAIL] curl or wget is required." >&2
+    return 1
+  fi
+}
+
+detect_os_arch() {
   OS="$(uname -s | tr '[:upper:]' '[:lower:]')"
   ARCH="$(uname -m)"
   case "${ARCH}" in
     x86_64|amd64) ARCH="amd64" ;;
     aarch64|arm64) ARCH="arm64" ;;
   esac
-  URL="${INSTALL_URL:-${LEIKWAN_PANEL_DIST_URL:-https://github.com/ike-sh/leikwan-toolkit/releases/download/panel-${VERSION}/leikwan-panel-${VERSION}-${OS}-${ARCH}.tar.gz}}"
-  echo "[INFO] Local dist not found; downloading ${URL}"
-  if command -v curl >/dev/null 2>&1; then
-    curl -fsSL "${URL}" -o "${TMP_DIR}/panel.tar.gz"
-  elif command -v wget >/dev/null 2>&1; then
-    wget -qO "${TMP_DIR}/panel.tar.gz" "${URL}"
+}
+
+install_deps_for_source_build() {
+  command -v go >/dev/null 2>&1 && return 0
+  if ! command -v apt-get >/dev/null 2>&1; then
+    echo "[FAIL] Source build requires go. Please install it manually." >&2
+    return 1
+  fi
+  echo "[INFO] Installing build dependencies for Agent source build."
+  apt-get update
+  apt-get install -y ca-certificates curl wget tar gzip golang
+}
+
+install_from_dist_dir() {
+  local dist="$1"
+  if [[ ! -x "${dist}/leikwan-agent" ]]; then
+    return 1
+  fi
+  echo "[INFO] Installing Agent from ${dist}"
+  install -m 0755 "${dist}/leikwan-agent" "${BIN_DST}"
+}
+
+try_local_dist() {
+  if [[ -z "${SCRIPT_DIR}" ]]; then
+    return 1
+  fi
+  local panel_dir
+  panel_dir="$(cd "${SCRIPT_DIR}/.." 2>/dev/null && pwd || true)"
+  [[ -n "${panel_dir}" ]] || return 1
+  if [[ -d "${panel_dir}/dist" ]]; then
+    install_from_dist_dir "${panel_dir}/dist"
+    return $?
+  fi
+  install_from_dist_dir "${panel_dir}"
+}
+
+extract_and_install_tarball() {
+  local tarball="$1"
+  local tmp="$2"
+  rm -rf "${tmp}/extract"
+  mkdir -p "${tmp}/extract"
+  tar -xzf "${tarball}" -C "${tmp}/extract"
+  local dist="${tmp}/extract"
+  if [[ ! -x "${dist}/leikwan-agent" ]]; then
+    dist="$(find "${tmp}/extract" -maxdepth 3 -type f -name leikwan-agent -perm -111 -print -quit | xargs -r dirname)"
+  fi
+  [[ -n "${dist}" ]] || return 1
+  install_from_dist_dir "${dist}"
+}
+
+try_release_download() {
+  local tmp="$1"
+  detect_os_arch
+  local urls=()
+  if [[ -n "${RELEASE_URL}" ]]; then
+    urls+=("${RELEASE_URL}")
   else
-    echo "[FAIL] curl or wget is required to download Panel dist." >&2
-    exit 1
+    local tags=("v${VERSION}" "panel-${VERSION}")
+    local assets=(
+      "leikwan-panel-${VERSION}-${OS}-${ARCH}.tar.gz"
+      "leikwan-panel-${OS}-${ARCH}.tar.gz"
+      "panel-dist-${OS}-${ARCH}.tar.gz"
+    )
+    for tag in "${tags[@]}"; do
+      for asset in "${assets[@]}"; do
+        urls+=("https://github.com/ike-sh/leikwan-toolkit/releases/download/${tag}/${asset}")
+      done
+    done
   fi
-  tar -xzf "${TMP_DIR}/panel.tar.gz" -C "${TMP_DIR}"
-  if [[ ! -x "${TMP_DIR}/leikwan-agent" ]]; then
-    echo "[FAIL] downloaded dist does not contain leikwan-agent" >&2
-    echo "[INFO] Please download the Panel release manually and rerun this script from panel/dist/scripts." >&2
-    exit 1
+  local url
+  for url in "${urls[@]}"; do
+    echo "[INFO] Trying Panel release: ${url}"
+    if download_file "${url}" "${tmp}/panel.tar.gz"; then
+      if extract_and_install_tarball "${tmp}/panel.tar.gz" "${tmp}"; then
+        return 0
+      fi
+      echo "[WARN] Release downloaded but layout was not usable: ${url}" >&2
+    else
+      echo "[WARN] Release not available: ${url}" >&2
+    fi
+  done
+  return 1
+}
+
+source_build_fallback() {
+  local tmp="$1"
+  install_deps_for_source_build
+  echo "[INFO] Falling back to Agent source build from GitHub main branch."
+  download_file "https://github.com/ike-sh/leikwan-toolkit/archive/refs/heads/main.tar.gz" "${tmp}/source.tar.gz"
+  rm -rf "${tmp}/source"
+  mkdir -p "${tmp}/source"
+  tar -xzf "${tmp}/source.tar.gz" -C "${tmp}/source" --strip-components=1
+  if [[ ! -d "${tmp}/source/panel/agent" ]]; then
+    echo "[FAIL] Source tarball missing panel/agent" >&2
+    return 1
   fi
-  install -m 0755 "${TMP_DIR}/leikwan-agent" "${BIN_DST}"
+  (
+    cd "${tmp}/source/panel/agent"
+    go build -o "${tmp}/leikwan-agent" ./cmd/leikwan-agent
+  )
+  install -m 0755 "${tmp}/leikwan-agent" "${BIN_DST}"
+}
+
+if ! try_local_dist; then
+  TMP_DIR="$(mktemp -d)"
+  trap 'rm -rf "${TMP_DIR}"' EXIT
+  if ! try_release_download "${TMP_DIR}"; then
+    source_build_fallback "${TMP_DIR}"
+  fi
 fi
 
 mkdir -p "${CONFIG_DIR}" "${STATE_DIR}"
@@ -111,24 +210,24 @@ EOF
 systemctl daemon-reload
 systemctl enable --now leikwan-agent.service
 
-if [[ "${TEST_ONCE}" == "1" ]]; then
-  if ! "${BIN_DST}" --config "${CONFIG_FILE}" --once; then
-    echo "[WARN] one-shot Agent report failed; service remains installed and will retry." >&2
-  fi
-else
-  if ! "${BIN_DST}" --config "${CONFIG_FILE}" --once; then
-    echo "[WARN] initial Agent report failed; service remains installed and will retry." >&2
-  fi
+if ! "${BIN_DST}" --config "${CONFIG_FILE}" --once; then
+  echo "[WARN] initial Agent report failed; service remains installed and will retry." >&2
 fi
 
-echo "[OK] Leikwan Panel Agent ${VERSION} installed."
-echo "[OK] Wrote ${CONFIG_FILE}"
-echo "[OK] Started leikwan-agent.service"
-echo "[OK] Controller URL: ${CONTROLLER_URL}"
-echo "[OK] Node name: ${NODE_NAME}"
-echo "[OK] Role: ${ROLE}"
-echo "[INFO] enable_tasks=${ENABLE_TASKS}"
-echo "[INFO] enable_write_actions=${ENABLE_WRITE_ACTIONS} (alpha/demo; stages Panel-managed config files only)"
-echo "[INFO] Service status: systemctl status leikwan-agent.service"
-echo "[INFO] Logs: journalctl -u leikwan-agent.service -f"
-echo "[INFO] This script does not modify Leikwan Shell Core, nftables, EasyTier, DDNS, entries.tsv, forwards.tsv, or PBR."
+cat <<EOF
+
+Leikwan Panel Agent installed.
+
+Controller URL: ${CONTROLLER_URL}
+Node name: ${NODE_NAME}
+Role: ${ROLE}
+enable_tasks=${ENABLE_TASKS}
+enable_write_actions=${ENABLE_WRITE_ACTIONS}
+
+Status:
+systemctl status leikwan-agent --no-pager
+
+Logs:
+journalctl -u leikwan-agent -n 100 --no-pager
+
+EOF

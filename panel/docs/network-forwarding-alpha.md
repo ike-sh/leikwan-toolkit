@@ -1,6 +1,6 @@
 # Network / Entry / Forwarding Alpha
 
-Leikwan Panel `3.0.0-alpha.1` adds a minimal Controller-side model for demo forwarding setup.
+Leikwan Panel `3.0.0-alpha.2` adds a minimal Controller-side model for demo forwarding setup.
 
 ## Network Profile
 

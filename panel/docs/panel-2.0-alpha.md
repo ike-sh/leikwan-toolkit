@@ -1,9 +1,9 @@
 # Leikwan Panel Preview History
 
-Leikwan Panel 2.0 preview / 2.1 stable �?Leikwan Toolkit �?Web 面板预览版。当前实现版本为 `3.0.0-alpha.1`�?
-1.4.x Shell 版继续作�?Leikwan Core / LTS，负责真实转发、nftables、EasyTier、DDNS、PBR 和本机维护。Panel 3.0.0-alpha.1 只做状态采集、汇总、只读任务、计划审计和安全控制，不做配置下发�?## 安全边界
+Leikwan Panel 2.0 preview / 2.1 stable �?Leikwan Toolkit �?Web 面板预览版。当前实现版本为 `3.0.0-alpha.2`�?
+1.4.x Shell 版继续作�?Leikwan Core / LTS，负责真实转发、nftables、EasyTier、DDNS、PBR 和本机维护。Panel 3.0.0-alpha.2 只做状态采集、汇总、只读任务、计划审计和安全控制，不做配置下发�?## 安全边界
 
-3.0.0-alpha.1 仍然不自动执行配置，明确不做�?
+3.0.0-alpha.2 仍然不自动执行配置，明确不做�?
 - 不远程执行任意命�?- 不下�?nftables / systemd / EasyTier / DDNS 配置
 - 不修�?`entries.tsv`、`forwards.tsv`、PBR 或任何转发规�?- 不自动做入口切换、转发新增、转发删除、relay restart
 - 不把 token、secret、private key、custom-url、custom-cmd 展示到前端、日志或 events �?
@@ -16,7 +16,7 @@ lq forward list
 lq ddns overview
 ```
 
-3.0.0-alpha.1 �?Plans 之外新增只读 Tasks：Controller 只能创建内置 action，Agent 只有�?`enable_tasks=true` 时拉取，并将 action 映射到固�?`lq` 只读 argv。它不接�?command 字符串，不执�?shell，不执行写操作�?
+3.0.0-alpha.2 �?Plans 之外新增只读 Tasks：Controller 只能创建内置 action，Agent 只有�?`enable_tasks=true` 时拉取，并将 action 映射到固�?`lq` 只读 argv。它不接�?command 字符串，不执�?shell，不执行写操作�?
 ## 架构
 
 ```text
@@ -63,7 +63,7 @@ curl http://127.0.0.1:18080/api/v1/health
 ```json
 {
   "name": "leikwan-controller",
-  "version": "3.0.0-alpha.1",
+  "version": "3.0.0-alpha.2",
   "status": "ok"
 }
 ```
@@ -173,7 +173,7 @@ SQLite 默认开发路径：
 `GET /api/v1/nodes` 会动态计�?offline：`last_seen` 超过 `3 * interval_seconds`，或未上�?interval 时超�?120 秒，视为 offline�?
 `GET /api/v1/bootstrap/agent-command` 返回的安装命令永远只包含 `REDACTED` token。Web API 不返�?Controller 的真�?token�?
 Plans API 只生成命令文本，不执行命令，也不会改变节点系统。Tasks API 只支持内置只�?action，不接受任意 command 字符串�?
-## 3.0.0-alpha.1 验收
+## 3.0.0-alpha.2 验收
 
 ```bash
 cd panel/controller
@@ -187,6 +187,6 @@ go test ./...
 
 ## Snapshot / Rollback Safety Framework
 
-`3.0.0-alpha.1` records manual snapshot and rollback metadata for Plans. It remains non-executing: no snapshot creation, no rollback, no relay restart, no Core configuration writes.
+`3.0.0-alpha.2` records manual snapshot and rollback metadata for Plans. It remains non-executing: no snapshot creation, no rollback, no relay restart, no Core configuration writes.
 
 Detailed docs: `snapshot-rollback-beta.md` and `safety-gate.md`.

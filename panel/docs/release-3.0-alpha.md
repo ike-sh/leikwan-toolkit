@@ -1,6 +1,6 @@
-# Leikwan Panel 3.0.0-alpha.1
+# Leikwan Panel 3.0.0-alpha.2
 
-`3.0.0-alpha.1` is the first real apply alpha for the Panel line.
+`3.0.0-alpha.2` is the first real apply alpha for the Panel line.
 
 It can queue fixed Agent actions for:
 

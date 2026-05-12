@@ -1,6 +1,6 @@
 # Plan Dry-run
 
-Leikwan Panel `3.0.0-alpha.1` adds readonly Plan dry-runs.
+Leikwan Panel `3.0.0-alpha.2` adds readonly Plan dry-runs.
 
 Dry-run is a preflight helper. It creates only built-in readonly tasks for the target node and waits for Agent results. It does not apply a Plan, does not run generated command text, and does not change Leikwan Core configuration.
 
@@ -57,9 +57,9 @@ Dry-run is not execution. It does not:
 
 Future write automation would still require explicit approval, dry-run, snapshot, rollback, a strict write allowlist, and auditable recovery behavior.
 
-## 3.0.0-alpha.1 Snapshot / Rollback Safety Framework
+## 3.0.0-alpha.2 Snapshot / Rollback Safety Framework
 
-Leikwan Panel 3.0.0-alpha.1 adds Plan fields for manual snapshot and rollback metadata plus Safety Gate and verification APIs. The Controller only records operator-provided references and notes. It does not create snapshots, roll back nodes, restart services, or modify Core configuration.
+Leikwan Panel 3.0.0-alpha.2 adds Plan fields for manual snapshot and rollback metadata plus Safety Gate and verification APIs. The Controller only records operator-provided references and notes. It does not create snapshots, roll back nodes, restart services, or modify Core configuration.
 
 New Plan APIs:
 
@@ -73,4 +73,4 @@ POST /api/v1/plans/:id/verify
 See `snapshot-rollback-beta.md` and `safety-gate.md`.
 ## Compatibility Note
 
-This document remains under its original filename for link compatibility. The dry-run flow described here is part of Leikwan Panel 3.0.0-alpha.1.
+This document remains under its original filename for link compatibility. The dry-run flow described here is part of Leikwan Panel 3.0.0-alpha.2.

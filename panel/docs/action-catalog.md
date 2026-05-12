@@ -1,6 +1,6 @@
 # Action Catalog
 
-Leikwan Panel `3.0.0-alpha.1` exposes all known actions through `/api/v1/action-catalog`.
+Leikwan Panel `3.0.0-alpha.2` exposes all known actions through `/api/v1/action-catalog`.
 
 ## Readonly Actions
 
@@ -30,7 +30,7 @@ They update Controller audit metadata only and never create Agent tasks.
 
 ## Demo Alpha Write Actions
 
-`3.0.0-alpha.1` enables a narrow `alpha_write` category:
+`3.0.0-alpha.2` enables a narrow `alpha_write` category:
 
 - `configure_node_role`
 - `apply_network_profile`
