@@ -1,7 +1,6 @@
 # Leikwan Toolkit
 
-<<<<<<< HEAD
-Leikwan Toolkit `1.4.2 LTS` is the Shell LTS line for local TCP/UDP forwarding, EasyTier relay / entry setup, nftables, IPv4 PBR, snapshots, status, doctor, and DDNS domain-resolution refresh.
+Leikwan Toolkit `1.4.3 LTS` is the Shell LTS line for local TCP/UDP forwarding, EasyTier relay / entry setup, nftables, IPv4 PBR, snapshots, status, doctor, and DDNS domain-resolution refresh.
 
 当前仓库只维护 Shell LTS：
 
@@ -9,41 +8,13 @@ Leikwan Toolkit `1.4.2 LTS` is the Shell LTS line for local TCP/UDP forwarding, 
 - `scripts/bootstrap.sh`
 - `docs/`
 - `tests/`
-=======
-Leikwan Toolkit Shell Core is `1.4.1 LTS`. This repository now keeps only the Shell LTS line: `leikwan-toolkit.sh`, `scripts/bootstrap.sh`, docs, and tests.
->>>>>>> origin/main
 
 历史 `panel/` 实现已迁移到 `edge-tunnel-panel`，本仓库不恢复这些文件。
 
-<<<<<<< HEAD
 ## 快速开始
 
 ```bash
 lq init
-=======
-## Quick Start
-
-```bash
-curl -fsSL -o /tmp/lq-bootstrap.sh https://raw.githubusercontent.com/ike-sh/leikwan-toolkit/main/scripts/bootstrap.sh
-bash /tmp/lq-bootstrap.sh
-lq
-```
-
-Common commands:
-
-```bash
-export LEIKWAN_GITHUB_MIRRORS="https://gh.llkk.cc/,https://gh.ddlc.top/,https://gh-proxy.com/,https://ghproxy.net/"
-curl -fsSL -o /tmp/lq-bootstrap.sh https://raw.githubusercontent.com/ike-sh/leikwan-toolkit/main/scripts/bootstrap.sh
-bash /tmp/lq-bootstrap.sh
-lq
-```
-
-## 常用命令
-
-```bash
-lq
-lq --version
->>>>>>> origin/main
 lq status
 lq status --verbose
 lq --doctor
@@ -56,7 +27,7 @@ lq forward apply-relay --auto-fix-route
 
 ```bash
 lq --version
-# leikwan-toolkit 1.4.2 LTS
+# leikwan-toolkit 1.4.3 LTS
 ```
 
 ## 域名解析变化自动刷新
@@ -72,7 +43,7 @@ Toolkit 在 B 利群主机侧定时解析这些域名，并根据解析结果相
 
 本机公网 IP 检测只作为辅助状态展示，不参与 entries / forwards / PBR 的变化判断。
 
-1.4.2 起，DDNS 域名检测支持多 DNS 解析器，避免只依赖系统 DNS 时漏掉国内外 DNS 传播不一致：
+1.4.3 起，DDNS 域名检测继续支持多 DNS 解析器，避免只依赖系统 DNS 时漏掉国内外 DNS 传播不一致：
 
 ```text
 DNS_RESOLVE_SERVERS=1.1.1.1,8.8.8.8,223.5.5.5,119.29.29.29
@@ -81,6 +52,14 @@ DNS_RESOLVE_WARN_ON_SPLIT=true
 ```
 
 默认优先使用 `1.1.1.1` / `8.8.8.8`，再使用国内 DNS。用户可以调整 `DNS_RESOLVE_SERVERS` 顺序，也可以把 `DNS_RESOLVE_STRATEGY` 设置为 `system-first` 或 `majority`。如果解析器返回不同 IP，会记录 WARN，并在状态中显示最近 DNS 分歧。
+
+多 DNS 检测建议安装 `dnsutils`：
+
+```bash
+apt install -y dnsutils
+```
+
+没有 `dig` 时会尝试 `nslookup`、`host` 和系统 resolver fallback；如果只能使用系统 resolver，状态会显示 `DNS 传播状态: 未完整检测`。
 
 发现采用结果与本地缓存不同时，Toolkit 会更新 resolved 缓存并自动刷新本地转发 / PBR。公网入口 `public_host` 变化时会标记 `relay restart needed`；默认不会自动重启 relay。需要自动重启时再显式设置：
 

@@ -19,6 +19,7 @@ mkdir -p "$LEIKWAN_RUN_DIR"
 source "$ROOT_DIR/leikwan-toolkit.sh"
 
 DDNS_LOG_FILE="${TMP_DIR}/ddns.log"
+ORIGINAL_PATH="$PATH"
 mkdir -p "$STATUS_DIR"
 
 [[ "$DNS_RESOLVE_SERVERS_DEFAULT" == "1.1.1.1,8.8.8.8,223.5.5.5,119.29.29.29" ]]
@@ -69,11 +70,12 @@ LAST_DDNS_RELAY_RESTARTED=false
 LAST_DDNS_DNS_STRATEGY=first-success
 LAST_DDNS_DNS_SERVERS=${DNS_RESOLVE_SERVERS_DEFAULT}
 LAST_DDNS_DNS_SPLIT_DETECTED=true
+LAST_DDNS_DNS_INCOMPLETE_DETECTED=false
 LAST_DDNS_DNS_SPLIT_DOMAIN=home.example.test
 LAST_DDNS_DNS_SPLIT_RESULTS=${RESOLVE_ALL_RESULTS}
 LAST_DDNS_DNS_SELECTED_IP=${RESOLVE_SELECTED_IP}
 LAST_DDNS_DNS_SELECTED_SOURCE=${RESOLVE_SELECTED_SOURCE}
-LAST_DDNS_VERSION=1.4.2
+LAST_DDNS_VERSION=1.4.3
 EOF
 
 status_out="$(ddns_status)"
@@ -83,13 +85,51 @@ grep -q "当前采用: 1.1.1.1" <<<"$status_out"
 grep -q "辅助公网 IP 检测源: https://4.ipw.cn" <<<"$status_out"
 
 dig() { return 127; }
+nslookup() { return 127; }
+host() { return 127; }
+command() {
+  if [[ "${1:-}" == "-v" ]]; then
+    case "${2:-}" in
+      dig|nslookup|host) return 1 ;;
+    esac
+  fi
+  builtin command "$@"
+}
+getent() {
+  case "$1" in
+    ahostsv4|ahosts) printf '%s STREAM home.example.test\n' "211.158.46.251" ;;
+    *) return 1 ;;
+  esac
+}
+DDNS_DNS_DIG_WARNED=false
+DDNS_DNS_INCOMPLETE_DETECTED=false
 resolve_domain_ipv4_multi home.example.test >"${TMP_DIR}/fallback.out" 2>&1
 fallback_out="$(cat "${TMP_DIR}/fallback.out")"
 [[ "$RESOLVE_SELECTED_IP" == "211.158.46.251" ]]
 [[ "$RESOLVE_SELECTED_SOURCE" == "system" ]]
+[[ "$RESOLVE_INCOMPLETE_DETECTED" == "true" ]]
+[[ "$DDNS_DNS_INCOMPLETE_DETECTED" == "true" ]]
 grep -q "system -> 211.158.46.251" <<<"$RESOLVE_ALL_RESULTS"
-[[ -z "$fallback_out" || "$fallback_out" == *"DNS 解析结果不一致"* ]]
+grep -q "dig 不存在，多 DNS 解析器检测能力受限，将尝试 fallback" <<<"$fallback_out"
 
+cat >"$DDNS_STATUS_FILE" <<EOF
+LAST_DDNS_TIME=2026-05-15 12:00:00
+LAST_DDNS_RESULT=ok
+LAST_DDNS_SCOPE=all
+LAST_DDNS_DNS_STRATEGY=first-success
+LAST_DDNS_DNS_SERVERS=${DNS_RESOLVE_SERVERS_DEFAULT}
+LAST_DDNS_DNS_SPLIT_DETECTED=false
+LAST_DDNS_DNS_INCOMPLETE_DETECTED=true
+LAST_DDNS_RELAY_RESTART_NEEDED=false
+LAST_DDNS_NFT_APPLIED=false
+LAST_DDNS_PBR_APPLIED=false
+LAST_DDNS_RELAY_RESTARTED=false
+EOF
+status_incomplete="$(ddns_status)"
+grep -q "DNS 传播状态: 未完整检测" <<<"$status_incomplete"
+
+unset -f dig nslookup host getent command
+PATH="$ORIGINAL_PATH"
 DNS_RESOLVE_STRATEGY="majority"
 ddns_config_value() {
   case "$1" in

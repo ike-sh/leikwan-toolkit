@@ -1,6 +1,6 @@
 # 域名解析变化自动刷新
 
-Leikwan Toolkit 1.4.2 LTS 将 DDNS 用户路径收敛为 B 利群主机侧的“域名解析变化自动刷新”。它默认不修改 DNS 服务商记录，也不要求配置 DNS provider token。
+Leikwan Toolkit 1.4.3 LTS 将 DDNS 用户路径收敛为 B 利群主机侧的“域名解析变化自动刷新”。它默认不修改 DNS 服务商记录，也不要求配置 DNS provider token。
 
 公网入口 A 的域名 / IP 可以由路由器、服务商客户端、Cloudflare、外部 DDNS 客户端或外部脚本维护。Toolkit 只在 B 侧定时解析域名，发现解析结果相对本地缓存变化后刷新本机转发、缓存和 PBR。
 
@@ -31,7 +31,7 @@ lq ddns logs
 
 ## 多 DNS 解析器
 
-1.4.2 起，域名解析变化检测不再只依赖系统默认 DNS。它会按配置的解析器列表执行 A 记录查询，并检测国内外 DNS 传播不一致或缓存不一致。
+1.4.3 起，域名解析变化检测不再只依赖系统默认 DNS。它会按配置的解析器列表执行 A 记录查询，并检测国内外 DNS 传播不一致或缓存不一致。
 
 默认配置：
 
@@ -42,6 +42,18 @@ DNS_RESOLVE_WARN_ON_SPLIT=true
 ```
 
 默认优先使用 `1.1.1.1` / `8.8.8.8`，再使用国内 DNS。用户可以调整 `DNS_RESOLVE_SERVERS` 的顺序。
+
+建议安装 `dnsutils` 以获得完整的多 DNS 解析器检测能力：
+
+```bash
+apt install -y dnsutils
+```
+
+没有 `dig` 时，脚本会依次尝试 `nslookup DOMAIN SERVER`、`host DOMAIN SERVER`，最后 fallback 到 `getent ahostsv4 DOMAIN`。如果只能使用系统 resolver，状态会显示：
+
+```text
+DNS 传播状态: 未完整检测
+```
 
 解析策略：
 

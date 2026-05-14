@@ -70,7 +70,7 @@ bash tests/redaction-regression.sh
 - `smoke.sh`：基础语法、版本、帮助和关键 CLI 参数识别。
 - `cli-regression.sh`：只读 CLI 在空状态目录下不触发全局 trap。
 - `render-regression.sh`：模拟 TSV，检查表格、紧凑渲染和核心菜单渲染。
-- `final-menu-regression.sh`：检查 1.4.2 LTS 主菜单只暴露 6 个核心入口，DDNS 和高级维护菜单保持收敛。
+- `final-menu-regression.sh`：检查 1.4.3 LTS 主菜单只暴露 6 个核心入口，DDNS 和高级维护菜单保持收敛。
 - `final-readme-regression.sh`：检查 README 标明 LTS、域名解析变化自动刷新、默认不修改 DNS 记录和常用命令。
 - `role-detection-regression.sh`：检查 relay 不因 entries.tsv 被误判为 entry，真实混合部署才 WARN。
 - `doctor-reset-regression.sh`：检查 doctor 每次运行都重置 WARN / FAIL 聚合，不继承历史 last-doctor。

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-TOOL_VERSION="1.4.2"
+TOOL_VERSION="1.4.3"
 RELEASE_CHANNEL="LTS"
 PROJECT_NAME="leikwan-toolkit"
 PROJECT_TITLE="利群快速组网工具"
@@ -45,11 +45,16 @@ RESOLVE_SELECTED_IP=""
 RESOLVE_SELECTED_SOURCE=""
 RESOLVE_ALL_RESULTS=""
 RESOLVE_SPLIT_DETECTED=false
+RESOLVE_INCOMPLETE_DETECTED=false
 DDNS_DNS_SPLIT_DETECTED=false
+DDNS_DNS_INCOMPLETE_DETECTED=false
+DDNS_DNS_DIG_WARNED=false
 DDNS_DNS_SPLIT_DOMAIN=""
 DDNS_DNS_SPLIT_RESULTS=""
 DDNS_DNS_SPLIT_SELECTED_IP=""
 DDNS_DNS_SPLIT_SELECTED_SOURCE=""
+DDNS_ENTRY_RECENT_EVENTS=""
+DDNS_ENTRY_RECENT_ACTION=""
 
 LOG_FILE="${LEIKWAN_LOG_FILE:-/var/log/leikwan-toolkit.log}"
 STATE_DIR="${LEIKWAN_STATE_DIR:-/etc/leikwan-toolkit}"
@@ -246,7 +251,13 @@ prompt_yes_no() {
   local prompt="$1" default="${2:-N}" answer suffix
   [[ "$default" =~ ^[Yy]$ ]] && suffix="[Y/n]" || suffix="[y/N]"
   while true; do
-    read -r -p "${prompt} ${suffix} " answer || answer=""
+    if [[ -t 0 ]]; then
+      read -r -p "${prompt} ${suffix} " answer || answer=""
+    else
+      printf '%s %s ' "$prompt" "$suffix" >&2
+      read -r answer || answer=""
+      printf '\n' >&2
+    fi
     answer="$(normalize_menu_choice "$answer")"
     answer="${answer:-$default}"
     answer="${answer,,}"
@@ -256,6 +267,15 @@ prompt_yes_no() {
       *) echo "请输入 y 或 n。" ;;
     esac
   done
+}
+
+prompt_enabled_value() {
+  local prompt="$1" default="${2:-true}"
+  if prompt_yes_no "$prompt" "$(bool_to_default "$default")"; then
+    printf 'true'
+  else
+    printf 'false'
+  fi
 }
 
 is_interactive() {
@@ -931,6 +951,16 @@ extract_first_ipv4() {
   done < <(printf '%s\n' "$input" | grep -Eo '([0-9]{1,3}\.){3}[0-9]{1,3}' 2>/dev/null || true)
 }
 
+extract_first_ipv4_except() {
+  local input="$1" skip="$2" ip
+  while IFS= read -r ip; do
+    if is_ipv4 "$ip" && [[ "$ip" != "$skip" ]]; then
+      printf '%s' "$ip"
+      return 0
+    fi
+  done < <(printf '%s\n' "$input" | grep -Eo '([0-9]{1,3}\.){3}[0-9]{1,3}' 2>/dev/null || true)
+}
+
 public_ip_check_urls() {
   local value="${1:-}" url
   local -a urls
@@ -1376,6 +1406,12 @@ dns_resolve_servers() {
   done
 }
 
+dns_server_query_tool_available() {
+  command -v dig >/dev/null 2>&1 ||
+    command -v nslookup >/dev/null 2>&1 ||
+    command -v host >/dev/null 2>&1
+}
+
 normalize_dns_resolve_strategy() {
   case "${1,,}" in
     first-success|system-first|majority) printf '%s' "${1,,}" ;;
@@ -1390,9 +1426,18 @@ dns_resolve_one_ipv4() {
     [[ -n "$ip" ]] && { printf '%s' "$ip"; return 0; }
     return 1
   fi
-  command -v dig >/dev/null 2>&1 || return 1
-  output="$(dig +short "$host" A @"$source" 2>/dev/null || true)"
-  ip="$(extract_first_ipv4 "$output")"
+  if command -v dig >/dev/null 2>&1; then
+    output="$(dig +short "$host" A @"$source" 2>/dev/null || true)"
+    ip="$(extract_first_ipv4 "$output")"
+  elif command -v nslookup >/dev/null 2>&1; then
+    output="$(nslookup "$host" "$source" 2>/dev/null || true)"
+    ip="$(extract_first_ipv4_except "$output" "$source")"
+  elif command -v host >/dev/null 2>&1; then
+    output="$(host "$host" "$source" 2>/dev/null || true)"
+    ip="$(extract_first_ipv4_except "$output" "$source")"
+  else
+    return 1
+  fi
   [[ -n "$ip" ]] && { printf '%s' "$ip"; return 0; }
   return 1
 }
@@ -1430,11 +1475,20 @@ resolve_domain_ipv4_multi() {
   RESOLVE_SELECTED_SOURCE=""
   RESOLVE_ALL_RESULTS=""
   RESOLVE_SPLIT_DETECTED=false
+  RESOLVE_INCOMPLETE_DETECTED=false
   if is_ipv4 "$host"; then
     RESOLVE_SELECTED_IP="$host"
     RESOLVE_SELECTED_SOURCE="literal"
     RESOLVE_ALL_RESULTS="literal -> ${host}"
     return 0
+  fi
+  if ! command -v dig >/dev/null 2>&1 && [[ "${DDNS_DNS_DIG_WARNED:-false}" != "true" ]]; then
+    DDNS_DNS_DIG_WARNED=true
+    ddns_emit WARN "dig 不存在，多 DNS 解析器检测能力受限，将尝试 fallback。"
+  fi
+  if ! dns_server_query_tool_available; then
+    RESOLVE_INCOMPLETE_DETECTED=true
+    DDNS_DNS_INCOMPLETE_DETECTED=true
   fi
   configured_servers="$(ddns_config_value DNS_RESOLVE_SERVERS "$DNS_RESOLVE_SERVERS_DEFAULT")"
   strategy="$(normalize_dns_resolve_strategy "$(ddns_config_value DNS_RESOLVE_STRATEGY "$DNS_RESOLVE_STRATEGY_DEFAULT")")"
@@ -3002,7 +3056,7 @@ display_entries() {
 
 select_entry_name() {
   local only_enabled="${1:-all}" prompt="${2:-请输入编号或名称，直接回车返回}" choice query name count
-  ensure_tsv_files
+  ensure_tsv_files >/dev/null
   count="$(entries_rows | awk -F'\t' -v only="$only_enabled" 'only=="enabled" && $7!="true"{next} {c++} END{print c+0}')"
   if (( count == 0 )); then
     warn "当前没有公网入口。" >&2
@@ -3723,7 +3777,7 @@ replace_entry_row() {
   name="${row%%$'\t'*}"
   old_name="${2:-$name}"
   ensure_tsv_files
-  tmp="$(mktemp)"
+  tmp="$(mktemp "${ENTRIES_DIR}/.tmp.entries.XXXXXX")"
   awk -F'\t' -v n="$name" -v old="$old_name" '$1==n || $1==old {next} {print}' "$ENTRIES_TSV" >"$tmp"
   printf '%s\n' "$row" >>"$tmp"
   write_file "$ENTRIES_TSV" "$(cat "$tmp")" 600
@@ -4026,7 +4080,7 @@ add_entry() {
     validate_unique_entry_fields "$name" "$et_ip" "$port" "$name" && break
   done
   weight="$(prompt_value "权重" "100")"
-  enabled="$(prompt_value "是否启用 true/false" "true")"
+  enabled="$(prompt_enabled_value "是否启用公网入口？" "true")"
   row="${name}"$'\t'"${public_host}"$'\t'"${et_ip}"$'\t'"${proto}"$'\t'"${port}"$'\t'"${weight}"$'\t'"${enabled}"
   confirm_summary "添加入口摘要" "name=${name}\npublic_host=${public_host}\net_ip=${et_ip}\nprotocols=${proto}\nlisten=$(easytier_protocols_display "$proto")/${port}\nport=${port}\nweight=${weight}\nenabled=${enabled}" || return 0
   replace_entry_row "$row"
@@ -4051,7 +4105,7 @@ edit_entry() {
     proto="$(prompt_easytier_protocols "EasyTier 传输模式" "$old_proto")"
     port="$(prompt_port "EasyTier 监听端口（TCP+UDP，同端口，白名单 8000-9000）" "$old_port")"
     weight="$(prompt_value "权重" "$old_weight")"
-    enabled="$(prompt_value "enabled true/false" "$old_enabled")"
+    enabled="$(prompt_enabled_value "是否启用公网入口 ${new_name}？" "$old_enabled")"
     [[ "$weight" =~ ^[0-9]+$ ]] || { warn "权重必须是非负整数。"; continue; }
     [[ "$enabled" == "true" || "$enabled" == "false" ]] || { warn "enabled 必须是 true 或 false。"; continue; }
     validate_unique_entry_fields "$new_name" "$et_ip" "$port" "$old_name" && break
@@ -4087,12 +4141,29 @@ set_entry_enabled() {
   local name enabled row old_enabled
   name="$(select_entry_name)" || return 0
   old_enabled="$(entries_rows | awk -F'\t' -v n="$name" '$1==n {print $7; exit}')"
-  enabled="$(prompt_value "enabled true/false" "${old_enabled:-true}")"
-  [[ "$enabled" == "true" || "$enabled" == "false" ]] || { warn "enabled 必须是 true 或 false。"; return 0; }
+  if [[ "${old_enabled:-false}" == "true" ]]; then
+    if prompt_yes_no "是否禁用公网入口 ${name}？" "N"; then
+      enabled="false"
+    else
+      info "已保持公网入口启用：${name}"
+      return 0
+    fi
+  else
+    if prompt_yes_no "是否启用公网入口 ${name}？" "Y"; then
+      enabled="true"
+    else
+      info "已保持公网入口禁用：${name}"
+      return 0
+    fi
+  fi
   row="$(entries_rows | awk -F'\t' -v n="$name" -v e="$enabled" 'BEGIN{OFS="\t"} $1==n {$7=e; print; found=1} END{exit !found}')"
   [[ -n "$row" ]] || { warn "入口不存在。"; return 0; }
   replace_entry_row "$row"
-  ok "已更新公网入口：${name} enabled=${enabled}"
+  if [[ "$enabled" == "true" ]]; then
+    ok "已启用公网入口：${name}"
+  else
+    ok "已禁用公网入口：${name}"
+  fi
   prompt_apply_relay_after_entry_change
 }
 
@@ -4157,6 +4228,7 @@ bulk_entry_enable_menu() {
     choice="$(prompt_menu_choice "请选择：")"
     case "$choice" in
       1)
+        prompt_yes_no "是否启用所有公网入口？" "Y" || return 0
         content="$(entries_rows | awk -F'\t' 'BEGIN{OFS="\t"} {$7="true"; print}')"
         write_file "$ENTRIES_TSV" "$content" 600
         ok "已启用所有公网入口。"
@@ -4166,7 +4238,7 @@ bulk_entry_enable_menu() {
         ;;
       2)
         warn "禁用所有入口会导致 relay 没有公网入口 peer。"
-        prompt_yes_no "是否继续？" "N" || return 0
+        prompt_yes_no "是否禁用所有公网入口？" "N" || return 0
         auto_snapshot_or_confirm "bulk-disable-entries" || return 0
         content="$(entries_rows | awk -F'\t' 'BEGIN{OFS="\t"} {$7="false"; print}')"
         write_file "$ENTRIES_TSV" "$content" 600
@@ -4177,6 +4249,7 @@ bulk_entry_enable_menu() {
         ;;
       3)
         name="$(select_entry_name all "请选择要保留 enabled 的编号或名称，直接回车返回")" || return 0
+        prompt_yes_no "是否只启用公网入口 ${name}，并禁用其它公网入口？" "Y" || return 0
         auto_snapshot_or_confirm "bulk-disable-entries" || return 0
         content="$(entries_rows | awk -F'\t' -v n="$name" 'BEGIN{OFS="\t"} {$7=($1==n ? "true" : "false"); print}')"
         write_file "$ENTRIES_TSV" "$content" 600
@@ -4735,8 +4808,7 @@ add_forward() {
   target_port="$(prompt_required_port "后端目标端口")"
   route_defaults="$(prompt_forward_route_choice "$target_host")"
   IFS=$'\t' read -r out_iface route_table <<<"$route_defaults"
-  enabled="$(prompt_value "是否启用 true/false" "true")"
-  [[ "$enabled" == "true" || "$enabled" == "false" ]] || { fail "enabled 必须是 true 或 false。"; return 1; }
+  enabled="$(prompt_enabled_value "是否启用转发目标？" "true")"
   comment="$(prompt_value "备注" "${name}-target")"
   if resolve_domain_ipv4_multi "$target_host"; then
     target_ip="$RESOLVE_SELECTED_IP"
@@ -4801,8 +4873,7 @@ set_forward_enabled() {
   local name enabled row old_enabled
   name="$(select_forward_name)" || return 0
   old_enabled="$(forwards_rows | awk -F'\t' -v n="$name" '$1==n {print $7; exit}')"
-  enabled="$(prompt_value "enabled true/false" "${old_enabled:-true}")"
-  [[ "$enabled" == "true" || "$enabled" == "false" ]] || { warn "enabled 必须是 true 或 false。"; return 0; }
+  enabled="$(prompt_enabled_value "是否启用转发目标 ${name}？" "${old_enabled:-true}")"
   row="$(forwards_rows | awk -F'\t' -v n="$name" -v e="$enabled" 'BEGIN{OFS="\t"} $1==n {$7=e; print; found=1} END{exit !found}')"
   [[ -n "$row" ]] || { warn "转发不存在。"; return 0; }
   replace_forward_row "$row"
@@ -4834,7 +4905,7 @@ edit_forward() {
   target_port="$(prompt_required_port "后端 TARGET_PORT（当前 ${old_tport}）")"
   route_defaults="$(prompt_forward_route_choice "$target_host" "$old_iface" "$old_route")"
   IFS=$'\t' read -r out_iface route_table <<<"$route_defaults"
-  enabled="$(prompt_value "是否启用 true/false" "$old_enabled")"
+  enabled="$(prompt_enabled_value "是否启用转发目标 ${old_name}？" "$old_enabled")"
   comment="$(prompt_value "备注" "$old_comment")"
   new_row="${old_name}"$'\t'"${entry_port}"$'\t'"${target_host}"$'\t'"${target_port}"$'\t'"${out_iface}"$'\t'"${route_table}"$'\t'"${enabled}"$'\t'"${comment}"
   confirm_summary "修改转发目标摘要" "name=${old_name}\nentry_port=${entry_port}\ntarget=${target_host}:${target_port}\nprotocols=tcp,udp\nout_iface=${out_iface:-auto}\nroute_table=$(route_table_display "$route_table")\nenabled=${enabled}" || return 0
@@ -5653,6 +5724,15 @@ ddns_entry_report_append() {
   DDNS_ENTRY_REPORT_BLOCKS="${DDNS_ENTRY_REPORT_BLOCKS}${DDNS_ENTRY_REPORT_BLOCKS:+$'\n'}${block}"
 }
 
+ddns_entry_recent_event_append() {
+  local name="$1" old_ip="$2" new_ip="$3" kind="$4" line
+  case "$kind" in
+    initial) line="${name}: 初次记录 ${new_ip}" ;;
+    *) line="${name}: ${old_ip:-none} -> ${new_ip}" ;;
+  esac
+  DDNS_ENTRY_RECENT_EVENTS="${DDNS_ENTRY_RECENT_EVENTS}${DDNS_ENTRY_RECENT_EVENTS:+;}${line}"
+}
+
 ddns_print_entry_detection_section() {
   local line
   ddns_output_line ""
@@ -5675,14 +5755,17 @@ ddns_write_last_status() {
   local forward_changed="$3" forward_failed="$4" entry_changed="$5" entry_failed="$6" pbr_changed="$7" pbr_failed="$8"
   local relay_restart_needed="$9" nft_applied="${10}" pbr_applied="${11}" relay_restarted="${12}"
   local public_ip="${13:-${DDNS_PUBLIC_IP:-}}" public_ip_source="${14:-${DDNS_PUBLIC_IP_SOURCE:-}}"
-  local dns_strategy dns_servers dns_split dns_split_domain dns_split_results dns_selected_ip dns_selected_source
+  local dns_strategy dns_servers dns_split dns_incomplete dns_split_domain dns_split_results dns_selected_ip dns_selected_source entry_recent entry_action
   dns_strategy="$(normalize_dns_resolve_strategy "$(ddns_config_value DNS_RESOLVE_STRATEGY "$DNS_RESOLVE_STRATEGY_DEFAULT")")"
   dns_servers="$(ddns_config_value DNS_RESOLVE_SERVERS "$DNS_RESOLVE_SERVERS_DEFAULT")"
   dns_split="${DDNS_DNS_SPLIT_DETECTED:-false}"
+  dns_incomplete="${DDNS_DNS_INCOMPLETE_DETECTED:-false}"
   dns_split_domain="${DDNS_DNS_SPLIT_DOMAIN:-}"
   dns_split_results="${DDNS_DNS_SPLIT_RESULTS:-}"
   dns_selected_ip="${DDNS_DNS_SPLIT_SELECTED_IP:-}"
   dns_selected_source="${DDNS_DNS_SPLIT_SELECTED_SOURCE:-}"
+  entry_recent="${DDNS_ENTRY_RECENT_EVENTS:-}"
+  entry_action="${DDNS_ENTRY_RECENT_ACTION:-}"
   (( DRY_RUN == 1 )) && return 0
   [[ ${EUID:-$(id -u)} -eq 0 ]] || return 0
   mkdir -p "$STATUS_DIR" 2>/dev/null || return 0
@@ -5714,10 +5797,13 @@ ddns_write_last_status() {
     printf 'LAST_DDNS_DNS_STRATEGY=%s\n' "$dns_strategy"
     printf 'LAST_DDNS_DNS_SERVERS=%s\n' "$dns_servers"
     printf 'LAST_DDNS_DNS_SPLIT_DETECTED=%s\n' "$dns_split"
+    printf 'LAST_DDNS_DNS_INCOMPLETE_DETECTED=%s\n' "$dns_incomplete"
     printf 'LAST_DDNS_DNS_SPLIT_DOMAIN=%s\n' "$dns_split_domain"
     printf 'LAST_DDNS_DNS_SPLIT_RESULTS=%s\n' "$dns_split_results"
     printf 'LAST_DDNS_DNS_SELECTED_IP=%s\n' "$dns_selected_ip"
     printf 'LAST_DDNS_DNS_SELECTED_SOURCE=%s\n' "$dns_selected_source"
+    printf 'LAST_DDNS_ENTRY_RECENT_EVENTS=%s\n' "$entry_recent"
+    printf 'LAST_DDNS_ENTRY_RECENT_ACTION=%s\n' "$entry_action"
     printf 'LAST_DDNS_VERSION=%s\n' "$TOOL_VERSION"
   } >"$DDNS_STATUS_FILE"
   chmod 600 "$DDNS_STATUS_FILE" 2>/dev/null || true
@@ -5908,6 +5994,7 @@ ddns_refresh_entries_scope() {
           fi
         elif [[ -z "$old_ip" ]]; then
           ddns_emit OK "公网入口 ${name} 解析已记录：${new_ip}"
+          ddns_entry_recent_event_append "$name" "" "$new_ip" "initial"
           last_changed="$checked_at"
         elif [[ "$old_ip" == "$new_ip" ]]; then
           ddns_emit OK "公网入口 ${name} 解析未变化：${new_ip}"
@@ -5918,6 +6005,7 @@ ddns_refresh_entries_scope() {
           DDNS_RELAY_RESTART_NEEDED=true
           last_changed="$checked_at"
           ddns_emit WARN "公网入口 ${name} 解析变化：${old_ip:-none} -> ${new_ip}"
+          ddns_entry_recent_event_append "$name" "$old_ip" "$new_ip" "changed"
           ddns_entry_report_append "$name" "$public_host" "$old_ip" "$new_ip" "changed" "yes"
         fi
       else
@@ -5980,12 +6068,28 @@ ddns_refresh_global_domains_scope() {
 }
 
 ddns_maybe_restart_relay() {
-  local non_interactive="$1"
+  local non_interactive="$1" auto_restart default_answer
   [[ "$DDNS_RELAY_RESTART_NEEDED" == "true" ]] || return 0
+  auto_restart="$(ddns_config_value DDNS_AUTO_RESTART_RELAY "$(ddns_config_value DDNS_ENTRY_AUTO_RESTART_RELAY "$DDNS_ENTRY_AUTO_RESTART_RELAY_DEFAULT")")"
   ddns_emit WARN "公网入口 ${DDNS_ENTRY_CHANGED} 的 DDNS 解析已变化。"
   ddns_emit WARN "EasyTier relay 可能需要重启才能重新解析 peer。"
   if (( non_interactive == 0 )) && is_interactive; then
-    if prompt_yes_no "是否现在重启 relay？" "N"; then
+    if [[ "${auto_restart,,}" == "true" || "${auto_restart,,}" == "yes" || "$auto_restart" == "1" || "${auto_restart,,}" == "on" ]]; then
+      default_answer="Y"
+      ddns_emit INFO "DDNS_AUTO_RESTART_RELAY=true"
+      if prompt_yes_no "已允许自动重启 relay；当前为交互执行，是否现在重启 relay？" "$default_answer"; then
+        ddns_auto_snapshot || warn "relay 重启前自动快照失败，将继续按用户确认操作。"
+        if apply_easytier_relay_service confirmed; then
+          DDNS_RELAY_RESTARTED=true
+          ddns_emit OK "已重启 relay。"
+        else
+          ddns_emit WARN "relay 重启失败，请稍后手动检查。"
+          return 1
+        fi
+      else
+        ddns_emit INFO "已记录公网入口 DDNS 变化，但未重启 relay。"
+      fi
+    elif prompt_yes_no "DDNS_AUTO_RESTART_RELAY=false；当前为交互执行，是否现在重启 relay？" "N"; then
       ddns_auto_snapshot || warn "relay 重启前自动快照失败，将继续按用户确认操作。"
       if apply_easytier_relay_service confirmed; then
         DDNS_RELAY_RESTARTED=true
@@ -6008,7 +6112,7 @@ ddns_maybe_restart_relay() {
       return 1
     fi
   else
-    ddns_emit INFO "timer/非交互模式默认不重启 relay。"
+    ddns_emit INFO "DDNS_AUTO_RESTART_RELAY=false，非交互模式只标记 relay restart needed。"
   fi
 }
 
@@ -6036,6 +6140,8 @@ ddns_refresh_once() {
   DDNS_NFT_APPLIED=false; DDNS_PBR_APPLIED=false; DDNS_RELAY_RESTARTED=false
   DDNS_FORWARD_NEED_APPLY=0; DDNS_FORWARD_PBR_NEED_SYNC=0
   DDNS_ENTRY_REPORT_BLOCKS=""
+  DDNS_ENTRY_RECENT_EVENTS=""
+  DDNS_ENTRY_RECENT_ACTION=""
   DDNS_FORWARD_CHECKED=0; DDNS_FORWARD_DOMAIN_COUNT=0; DDNS_FORWARD_CHANGED_COUNT=0; DDNS_FORWARD_FAILED_COUNT=0
   DDNS_ENTRY_CHECKED=0; DDNS_ENTRY_DOMAIN_COUNT=0; DDNS_ENTRY_CHANGED_COUNT=0; DDNS_ENTRY_FAILED_COUNT=0
   DDNS_PBR_DOMAIN_COUNT=0; DDNS_PBR_CHANGED_COUNT=0; DDNS_PBR_FAILED_COUNT=0
@@ -6050,6 +6156,8 @@ ddns_refresh_once() {
     return 0
   fi
   DDNS_DNS_SPLIT_DETECTED=false
+  DDNS_DNS_INCOMPLETE_DETECTED=false
+  DDNS_DNS_DIG_WARNED=false
   DDNS_DNS_SPLIT_DOMAIN=""
   DDNS_DNS_SPLIT_RESULTS=""
   DDNS_DNS_SPLIT_SELECTED_IP=""
@@ -6141,6 +6249,17 @@ ddns_refresh_once() {
   elif ! ddns_maybe_restart_relay "$non_interactive"; then
     result="warn"
   fi
+  if [[ -n "$DDNS_ENTRY_RECENT_EVENTS" ]]; then
+    DDNS_ENTRY_RECENT_ACTION="已写入缓存"
+    if [[ "$DDNS_NFT_APPLIED" == "true" ]]; then
+      DDNS_ENTRY_RECENT_ACTION="${DDNS_ENTRY_RECENT_ACTION} / 已重应用 nftables"
+    fi
+    if [[ "$DDNS_RELAY_RESTARTED" == "true" ]]; then
+      DDNS_ENTRY_RECENT_ACTION="${DDNS_ENTRY_RECENT_ACTION} / relay 已重启"
+    elif [[ "$DDNS_RELAY_RESTART_NEEDED" == "true" ]]; then
+      DDNS_ENTRY_RECENT_ACTION="${DDNS_ENTRY_RECENT_ACTION} / relay restart needed"
+    fi
+  fi
   if [[ -n "$DDNS_FORWARD_FAILED$DDNS_ENTRY_FAILED$DDNS_PBR_FAILED" && "$result" == "ok" ]]; then
     result="warn"
   fi
@@ -6162,16 +6281,11 @@ ddns_refresh_once() {
 }
 
 render_ddns_service() {
-  local exec_path="/root/leikwan-toolkit.sh"
-  if [[ -x "$SHORTCUT_LQ" ]]; then
-    exec_path="$SHORTCUT_LQ"
-  elif [[ -n "${BASH_SOURCE[0]:-}" && -f "${BASH_SOURCE[0]}" ]]; then
-    exec_path="${BASH_SOURCE[0]}"
-  fi
+  local exec_path="$SHORTCUT_LQ"
   cat <<EOF
 # Managed by leikwan-toolkit ${TOOL_VERSION}
 [Unit]
-Description=Leikwan global IP change detection refresh
+Description=Leikwan DDNS domain resolution refresh
 After=network-online.target
 Wants=network-online.target
 
@@ -6187,7 +6301,7 @@ render_ddns_timer() {
   cat <<EOF
 # Managed by leikwan-toolkit ${TOOL_VERSION}
 [Unit]
-Description=Leikwan global IP change detection timer
+Description=Leikwan DDNS domain resolution timer
 
 [Timer]
 OnBootSec=2min
@@ -6256,8 +6370,9 @@ ddns_status() {
   local timer_state interval auto_enabled update_dns
   local last_time last_result last_scope forward_changed forward_failed entry_changed entry_failed pbr_changed pbr_failed
   local relay_restart_needed nft_applied pbr_applied relay_restarted public_ip public_ip_source
-  local dns_strategy dns_servers dns_split dns_split_domain dns_split_results dns_selected_ip dns_selected_source dns_line
-  local -a _ddns_status_dns_lines
+  local dns_strategy dns_servers dns_split dns_incomplete dns_split_domain dns_split_results dns_selected_ip dns_selected_source dns_line
+  local entry_recent_events entry_recent_action entry_line
+  local -a _ddns_status_dns_lines _ddns_status_entry_lines
   local forward_count entry_count pbr_count forward_checked entry_checked pbr_checked
   local forward_changed_count forward_failed_count entry_changed_count entry_failed_count pbr_changed_count pbr_failed_count
   local nft_text pbr_text
@@ -6286,6 +6401,7 @@ ddns_status() {
   dns_servers="$(env_file_get "$DDNS_STATUS_FILE" LAST_DDNS_DNS_SERVERS)"
   [[ -n "$dns_servers" ]] || dns_servers="$(ddns_config_value DNS_RESOLVE_SERVERS "$DNS_RESOLVE_SERVERS_DEFAULT")"
   dns_split="$(env_file_get "$DDNS_STATUS_FILE" LAST_DDNS_DNS_SPLIT_DETECTED)"
+  dns_incomplete="$(env_file_get "$DDNS_STATUS_FILE" LAST_DDNS_DNS_INCOMPLETE_DETECTED)"
   dns_split_domain="$(env_file_get "$DDNS_STATUS_FILE" LAST_DDNS_DNS_SPLIT_DOMAIN)"
   dns_split_results="$(env_file_get "$DDNS_STATUS_FILE" LAST_DDNS_DNS_SPLIT_RESULTS)"
   dns_selected_ip="$(env_file_get "$DDNS_STATUS_FILE" LAST_DDNS_DNS_SELECTED_IP)"
@@ -6326,6 +6442,8 @@ ddns_status() {
   echo "DNS 解析器: ${dns_servers}"
   if [[ "${dns_split,,}" == "true" ]]; then
     echo "DNS 传播状态: 不一致"
+  elif [[ "${dns_incomplete,,}" == "true" ]]; then
+    echo "DNS 传播状态: 未完整检测"
   else
     echo "DNS 传播状态: 一致"
   fi
@@ -6350,6 +6468,17 @@ ddns_status() {
       [[ -n "$dns_line" ]] && echo "$dns_line"
     done
     echo "当前采用: ${dns_selected_ip:-"-"}${dns_selected_source:+（source=${dns_selected_source}）}"
+  fi
+  entry_recent_events="$(env_file_get "$DDNS_STATUS_FILE" LAST_DDNS_ENTRY_RECENT_EVENTS)"
+  entry_recent_action="$(env_file_get "$DDNS_STATUS_FILE" LAST_DDNS_ENTRY_RECENT_ACTION)"
+  if [[ -n "$entry_recent_events" ]]; then
+    echo
+    echo "最近公网入口变化:"
+    IFS=';' read -ra _ddns_status_entry_lines <<<"$entry_recent_events"
+    for entry_line in "${_ddns_status_entry_lines[@]}"; do
+      [[ -n "$entry_line" ]] && echo "$entry_line"
+    done
+    echo "动作: ${entry_recent_action:-已写入缓存}"
   fi
   [[ -n "$last_scope" ]] && echo "详细分类: ${last_scope}"
 }
@@ -8097,8 +8226,7 @@ pbr_domain_add() {
   done
   group="$(pbr_select_group)" || return 0
   route_table="T_${group#T_}"
-  enabled="$(prompt_value "enabled true/false" "true")"
-  [[ "$enabled" == "true" || "$enabled" == "false" ]] || { warn "enabled 必须是 true 或 false。"; return 0; }
+  enabled="$(prompt_enabled_value "是否启用域名 PBR？" "true")"
   comment="$(prompt_value "备注" "${name}-ddns-pbr")"
     if resolve_domain_ipv4_multi "$host"; then
       resolved="$RESOLVE_SELECTED_IP"
@@ -9838,14 +9966,21 @@ ddns_public_entry_change_label() {
 }
 
 status_ddns_compact_block() {
-  local split strategy
+  local split incomplete strategy
   split="$(env_file_get "$DDNS_STATUS_FILE" LAST_DDNS_DNS_SPLIT_DETECTED)"
+  incomplete="$(env_file_get "$DDNS_STATUS_FILE" LAST_DDNS_DNS_INCOMPLETE_DETECTED)"
   strategy="$(env_file_get "$DDNS_STATUS_FILE" LAST_DDNS_DNS_STRATEGY)"
   [[ -n "$strategy" ]] || strategy="$(ddns_config_value DNS_RESOLVE_STRATEGY "$DNS_RESOLVE_STRATEGY_DEFAULT")"
   echo "DDNS:"
   echo "- 域名解析变化检测: $(ddns_global_state_label)"
   echo "- DNS 解析策略: ${strategy}"
-  echo "- DNS 传播状态: $([[ "${split,,}" == "true" ]] && printf '不一致' || printf '一致')"
+  if [[ "${split,,}" == "true" ]]; then
+    echo "- DNS 传播状态: 不一致"
+  elif [[ "${incomplete,,}" == "true" ]]; then
+    echo "- DNS 传播状态: 未完整检测"
+  else
+    echo "- DNS 传播状态: 一致"
+  fi
   echo "- relay restart needed: $(bool_yes_no "$(env_file_get "$DDNS_STATUS_FILE" LAST_DDNS_RELAY_RESTART_NEEDED)")"
 }
 
@@ -9967,7 +10102,7 @@ report_b_ddns_entry_monitor_status() {
 }
 
 report_ddns_global_state() {
-  local public_ip public_source result forward_failed entry_failed pbr_failed restart_needed update_dns dns_split dns_domain dns_selected
+  local public_ip public_source result forward_failed entry_failed pbr_failed restart_needed update_dns dns_split dns_domain dns_selected ddns_enabled timer_state
   public_ip="$(env_file_get "$DDNS_STATUS_FILE" LAST_DDNS_PUBLIC_IP)"
   public_source="$(env_file_get "$DDNS_STATUS_FILE" LAST_DDNS_PUBLIC_IP_SOURCE)"
   result="$(env_file_get "$DDNS_STATUS_FILE" LAST_DDNS_RESULT)"
@@ -9979,6 +10114,8 @@ report_ddns_global_state() {
   dns_split="$(env_file_get "$DDNS_STATUS_FILE" LAST_DDNS_DNS_SPLIT_DETECTED)"
   dns_domain="$(env_file_get "$DDNS_STATUS_FILE" LAST_DDNS_DNS_SPLIT_DOMAIN)"
   dns_selected="$(env_file_get "$DDNS_STATUS_FILE" LAST_DDNS_DNS_SELECTED_IP)"
+  ddns_enabled="$(ddns_config_value DDNS_GLOBAL_ENABLED "$DDNS_GLOBAL_ENABLED_DEFAULT")"
+  timer_state="$(ddns_timer_state)"
   if [[ -n "$public_ip" ]]; then
     report OK "辅助公网 IP 检测最近成功：${public_ip} (${public_source:-unknown})"
   elif [[ -n "$result" ]]; then
@@ -9995,6 +10132,9 @@ report_ddns_global_state() {
   if [[ "${dns_split,,}" == "true" ]]; then
     report WARN "检测到 DNS 传播不一致：${dns_domain:-未知域名}，当前采用 ${dns_selected:-未知 IP}。"
     report INFO "可调整 DNS_RESOLVE_SERVERS 或 DNS_RESOLVE_STRATEGY。"
+  fi
+  if { [[ "${ddns_enabled,,}" == "true" ]] || [[ "$timer_state" == "active" ]]; } && ! command -v dig >/dev/null 2>&1; then
+    report WARN "建议安装 dnsutils 以启用多 DNS 解析器检测：apt install -y dnsutils"
   fi
   if [[ "${restart_needed:-false}" == "true" ]]; then
     report WARN "relay restart needed: yes，请在维护窗口重启 relay。"
@@ -10193,7 +10333,13 @@ status_overview_relay() {
     echo "辅助公网 IP 检测源: $(env_file_get "$DDNS_STATUS_FILE" LAST_DDNS_PUBLIC_IP_SOURCE)"
     echo "DNS 解析策略: $(env_file_get "$DDNS_STATUS_FILE" LAST_DDNS_DNS_STRATEGY)"
     echo "DNS 解析器: $(env_file_get "$DDNS_STATUS_FILE" LAST_DDNS_DNS_SERVERS)"
-    echo "DNS 传播状态: $([[ "$(env_file_get "$DDNS_STATUS_FILE" LAST_DDNS_DNS_SPLIT_DETECTED)" == "true" ]] && printf '不一致' || printf '一致')"
+    if [[ "$(env_file_get "$DDNS_STATUS_FILE" LAST_DDNS_DNS_SPLIT_DETECTED)" == "true" ]]; then
+      echo "DNS 传播状态: 不一致"
+    elif [[ "$(env_file_get "$DDNS_STATUS_FILE" LAST_DDNS_DNS_INCOMPLETE_DETECTED)" == "true" ]]; then
+      echo "DNS 传播状态: 未完整检测"
+    else
+      echo "DNS 传播状态: 一致"
+    fi
     echo "后端域名检测: $(status_ddns_forward_summary)"
     echo "公网入口域名检测: $(status_ddns_entry_summary)"
     echo "PBR 域名检测: $(status_ddns_pbr_summary)"
