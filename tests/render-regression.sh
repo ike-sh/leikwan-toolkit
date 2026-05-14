@@ -62,6 +62,6 @@ main_out="$(print_main_menu_options)"
 grep -q "1. 快速组网" <<<"$main_out"
 grep -q "6. 高级维护" <<<"$main_out"
 ddns_out="$(print_ddns_menu_options)"
-grep -q "4. 配置 A 端 DDNS" <<<"$ddns_out"
+grep -q "4. 查看 DDNS 日志" <<<"$ddns_out"
 
 echo "[OK] render regression passed"

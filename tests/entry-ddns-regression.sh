@@ -5,7 +5,8 @@ set -Eeuo pipefail
 ROOT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
-TMP_DIR="$(mktemp -d)"
+mkdir -p "$ROOT_DIR/.tmp"
+TMP_DIR="$(TMPDIR="$ROOT_DIR/.tmp" mktemp -d)"
 trap 'rm -rf "$TMP_DIR"' EXIT
 
 export LEIKWAN_STATE_DIR="${TMP_DIR}/state"
@@ -32,18 +33,18 @@ LAST_ENTRY_DDNS_HOST=home.example.test
 LAST_ENTRY_DDNS_PUBLIC_IP=198.51.100.10
 LAST_ENTRY_DDNS_RESOLVED_IP=198.51.100.10
 LAST_ENTRY_DDNS_CHANGED=false
-LAST_ENTRY_DDNS_VERSION=1.4.0
+LAST_ENTRY_DDNS_VERSION=1.4.1
 EOF
 
 [[ -f "$ENTRY_DDNS_CONFIG" ]] || { echo "FAIL: entry ddns config not created" >&2; exit 1; }
 
 status_out="$(entry_ddns_status)"
-grep -q "A 端公网入口 DDNS 状态" <<<"$status_out"
+grep -q "兼容 DNS 更新状态" <<<"$status_out"
 grep -q "home.example.test" <<<"$status_out"
 grep -q "一致性: OK" <<<"$status_out"
 
 summary_out="$(entry_ddns_current_config_summary)"
-grep -q "A 端公网入口 DDNS 当前配置" <<<"$summary_out"
+grep -q "兼容 DNS 更新当前配置" <<<"$summary_out"
 grep -q "provider: custom-url" <<<"$summary_out"
 
 safe_url="$(redact_sensitive_inline "$update_url")"
@@ -73,7 +74,7 @@ fi
 
 no_config_state="${TMP_DIR}/empty-state"
 out="$(LEIKWAN_STATE_DIR="$no_config_state" LEIKWAN_RUN_DIR="${TMP_DIR}/run2" LEIKWAN_LOG_DISABLED=1 bash leikwan-toolkit.sh entry ddns status 2>&1)"
-grep -q "未配置 A 端 DDNS 更新器" <<<"$out"
+grep -q "未配置兼容 DNS 更新入口" <<<"$out"
 if grep -q "错误：脚本在第" <<<"$out"; then
   echo "FAIL: entry ddns status triggered global trap" >&2
   echo "$out" >&2

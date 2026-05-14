@@ -1,45 +1,10 @@
 # Leikwan Toolkit
 
-Leikwan Toolkit 是一个基于 Shell 的快速组网、入口管理、转发管理与诊断工具。
+Leikwan Toolkit Shell Core is `1.4.1 LTS`. This repository now keeps only the Shell LTS line: `leikwan-toolkit.sh`, `scripts/bootstrap.sh`, docs, and tests.
 
-当前仓库只维护 **Shell 脚本版 LTS**：
+Leikwan Toolkit is a TCP/UDP forwarding toolkit for a public entry, relay host, and backend target topology. The Shell Core owns the real local behavior: EasyTier, nftables forwarding, global IP change detection, PBR, snapshots, status, doctor, and maintenance.
 
-- `leikwan-toolkit.sh`
-- `scripts/bootstrap.sh`
-- Shell 版状态查看、诊断、DDNS、PBR、转发管理、快照与维护能力
-
-Web 面板、Controller、Agent、前端页面等代码已经迁移到独立仓库。
-
-## 当前稳定版本
-
-```text
-Leikwan Toolkit 1.4.0 LTS
-```
-
-`1.4.0 LTS` 是 Shell 版功能冻结稳定线。后续本仓库只建议做严重 Bug 修复、兼容性修复和文档维护，不再继续承载 Panel 主线功能。
-
-## Panel 已迁移
-
-Web 面板 / Controller / Agent / EasyTier 面板化管理已经迁移到新仓库：
-
-```text
-https://github.com/ike-sh/edge-tunnel-panel
-```
-
-如果你需要以下功能，请使用新仓库：
-
-- Web 主控面板
-- Agent 节点接入
-- 一键添加节点
-- EasyTier 组网
-- TCP / UDP 转发
-- PBR 出口策略
-- DDNS
-- Web 可视化管理
-
-本仓库不再维护 Panel 代码。
-
-## 一键安装 Shell 版
+## Quick Start
 
 ```bash
 curl -fsSL -o /tmp/lq-bootstrap.sh https://raw.githubusercontent.com/ike-sh/leikwan-toolkit/main/scripts/bootstrap.sh
@@ -47,7 +12,7 @@ bash /tmp/lq-bootstrap.sh
 lq
 ```
 
-如果 GitHub 网络不稳定，可以使用镜像环境变量：
+Common commands:
 
 ```bash
 export LEIKWAN_GITHUB_MIRRORS="https://gh.llkk.cc/,https://gh.ddlc.top/,https://gh-proxy.com/,https://ghproxy.net/"
@@ -63,130 +28,71 @@ lq
 lq --version
 lq status
 lq status --verbose
-lq doctor
+lq --doctor
+lq ddns run
+lq ddns status
+lq forward apply-relay --auto-fix-route
+lq update check
 ```
 
-## Shell 版功能范围
+## Shell LTS Scope
 
-Shell 版仍保留以下能力：
+The former `panel/` code has moved to the separate `edge-tunnel-panel` repository and is not part of this Shell LTS line. This repo does not restore panel implementation files.
 
-- 快速组网辅助
-- 公网入口配置
-- 利群中转配置
-- 转发目标管理
-- TCP / UDP 转发配置
-- DDNS 检测与刷新
-- PBR 出口策略
-- 状态查看
-- 诊断检查
-- 快照与恢复辅助
-- 高级维护入口
+## 全局 IP 变化检测与自动刷新
 
-这些能力均通过 `lq` / `leikwan-toolkit.sh` 在本机交互式执行，不依赖 Web 面板。
+Leikwan Toolkit 默认不修改 DNS 服务商记录。你的 DDNS 解析记录可以由路由器、服务商客户端、Cloudflare、Cloudflare Worker、外部 DDNS 客户端或外部脚本维护。
 
-## 项目边界
+Toolkit 只负责检测 IP 和域名解析是否变化：
 
-本仓库只保留 Shell LTS 线。
+- 检测本机公网 IP。
+- 检测 `entries.tsv` 中 enabled `public_host` 域名。
+- 检测 `forwards.tsv` 中 enabled `target_host` 域名。
+- 检测 PBR 域名规则。
+- 发现变化后自动刷新本地转发、`resolved.tsv` 缓存和 PBR。
 
-不包含：
-
-- Web Panel
-- Controller
-- Agent
-- React 前端
-- Go Controller / Agent
-- 面板安装脚本
-- 面板发布包
-- Edge Tunnel Panel 代码
-
-这些内容已经迁移到：
+内置公网 IP 检测 URL 池，国内外服务器都可以直接使用：
 
 ```text
-https://github.com/ike-sh/edge-tunnel-panel
+https://api.ipify.org
+https://ifconfig.me/ip
+https://ipv4.icanhazip.com
+https://4.ipw.cn
+https://ip.3322.net
+https://myip.ipip.net
 ```
 
-## 目录说明
+默认不会自动重启 relay，避免中断业务。公网入口域名解析变化时只标记 `relay restart needed`；需要自动重启时再显式设置：
 
 ```text
-leikwan-toolkit.sh              Shell 主脚本
-scripts/bootstrap.sh            Shell 版安装脚本
-scripts/check-redaction.sh      脱敏检查脚本
-docs/                           Shell 版文档
-tests/                          Shell 版回归测试
+DDNS_AUTO_RESTART_RELAY=true
 ```
 
-## 建议保留的文档
-
-建议 `docs/` 目录只保留 Shell 相关文档，例如：
+默认配置位于：
 
 ```text
-docs/final-guide.md
-docs/cli.md
-docs/release-notes.md
-docs/status.md
-docs/doctor.md
-docs/workflow.md
-docs/troubleshooting.md
-docs/acceptance-test.md
-docs/ddns-refresh.md
-docs/architecture.md
-docs/uninstall.md
+/etc/leikwan-toolkit/ddns-global.env
 ```
 
-如果仓库中仍有 Panel / Controller / Agent 相关历史文档，建议删除或迁移到：
+关键默认值：
 
 ```text
-https://github.com/ike-sh/edge-tunnel-panel
+DDNS_UPDATE_DNS_RECORD=false
+DDNS_AUTO_APPLY=true
+DDNS_AUTO_SYNC_PBR=true
+DDNS_AUTO_RESTART_RELAY=false
+PUBLIC_IP_CHECK_URLS=
 ```
 
-## 清理 Panel 残留
+兼容旧版 DNS 更新能力仍保留给高级用户，但普通路径不需要 DNS provider token。
 
-如果你要把旧仓库恢复成 Shell LTS 仓库，可以手动删除：
+## Docs
 
-```powershell
-cd D:\leikwan-toolkit
-
-Remove-Item -Recurse -Force .\panel -ErrorAction SilentlyContinue
-Remove-Item -Recurse -Force .\dist\panel* -ErrorAction SilentlyContinue
-Remove-Item -Recurse -Force .\dist\leikwan-panel* -ErrorAction SilentlyContinue
-```
-
-然后检查残留：
-
-```powershell
-rg -n "Panel|Controller|Agent|edge-tunnel-panel|Edge Tunnel|3\.0\.0|2\.2\.0|2\.1\.0|LEIKWAN_OPERATOR_TOKEN|write_actions|Action Catalog|Safety Gate" README.md docs scripts tests leikwan-toolkit.sh
-```
-
-README 中保留“Panel 已迁移到 edge-tunnel-panel”的说明是可以的；其他 Panel 主线代码和文档建议删除。
-
-## 检查 Shell 脚本
-
-```bash
-bash -n leikwan-toolkit.sh
-bash -n scripts/bootstrap.sh
-```
-
-如果有测试脚本，也可以运行对应回归测试：
-
-```bash
-bash tests/final-menu-regression.sh
-bash tests/final-readme-regression.sh
-```
-
-## 版本策略
-
-`1.4.0 LTS` 是 Shell 版稳定线。
-
-后续规划：
-
-```text
-ike-sh/leikwan-toolkit
-= Shell 脚本 LTS 仓库
-
-ike-sh/edge-tunnel-panel
-= Panel / Controller / Agent / Web 主线仓库
-```
-
-## License
-
-请根据仓库实际许可证文件为准。
+- [DDNS / IP 变化检测](docs/ddns-refresh.md)
+- [CLI](docs/cli.md)
+- [状态输出](docs/status.md)
+- [Doctor](docs/doctor.md)
+- [PBR](docs/pbr.md)
+- [nftables 转发](docs/nftables-forwarding.md)
+- [Workflow](docs/workflow.md)
+- [Testing](docs/testing.md)

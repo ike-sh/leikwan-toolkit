@@ -1,6 +1,6 @@
 # doctor 诊断
 
-Leikwan Toolkit 1.4.0 继续保留详细 `doctor`，同时修复历史 FAIL / WARN 污染问题，并新增自动修复常见问题入口。
+Leikwan Toolkit 1.4.1 继续保留详细 `doctor`，同时修复历史 FAIL / WARN 污染问题，并新增自动修复常见问题入口。
 
 ## 常用命令
 
@@ -91,12 +91,14 @@ DDNS: OK
 
 存在问题时会输出“建议修复”，优先给出 `lq doctor --auto-fix`、`lq ddns apply-entries` 或 `lq forward apply-relay --auto-fix-route`。
 
-## DDNS 双端检查
+## DDNS / IP 变化检查
 
-1.4.0 起，doctor 会同时提示 A/B 两侧 DDNS 边界：
+1.4.1 起，doctor 会按“全局 IP 变化检测”提示 DDNS 状态：
 
-- A 公网入口使用域名但本机 DDNS 更新器未启用时，会 WARN，并提示 `lq entry ddns setup`。如果域名由外部 DDNS 客户端维护，可以忽略。
-- B 利群主机检测到 enabled 公网入口域名但 B 端 DDNS timer 未启用时，会提示 `lq ddns enable`。
-- B 端发现公网入口域名变化且 relay 尚未重启时，会提示 `lq ddns apply-entries`。
+- 检测到 enabled 公网入口域名但全局检测 timer 未启用时，会提示 `lq ddns enable`。
+- 公网 IP 检测全部失败时，会提示检查网络或自定义 `PUBLIC_IP_CHECK_URLS`。
+- 域名解析失败时，会提示检查 DNS。
+- 公网入口域名变化且 relay 尚未重启时，会提示 `relay restart needed`，建议维护窗口处理。
+- 只有显式设置 `DDNS_UPDATE_DNS_RECORD=true` 时，才会提示兼容 DNS 更新 provider/token。
 
 doctor 仍不会自动删除 entries、forwards、PBR，也不会重置 EasyTier network secret。

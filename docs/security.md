@@ -109,9 +109,9 @@ JSON 只输出状态摘要、计数、健康度评分和 WARN / FAIL 概要，�
 
 1.4.0 起，脚本会根据真正的角色信号做检测：relay service 或 `ROLE=leikwan-relay` 表示 B 角色；entry service、`ROLE=cloud-entry` 或 entry env 表示 A 角色。`entries.tsv` 不再作为 entry 判据，`forwards.tsv` 也不能单独决定角色。B 菜单在 A 机器执行高危操作、A 菜单在 B 机器执行高危操作时会先提示角色不匹配，交互模式默认不继续。
 
-## A 端 DDNS 凭据
+## 兼容 DNS 更新凭据
 
-A 端 `lq entry ddns setup` 可能保存 DNS 服务商 token、custom URL 或 custom command 到：
+默认全局 IP 变化检测不会保存 DNS provider token。只有显式启用 `DDNS_UPDATE_DNS_RECORD=true` 并使用兼容入口时，`lq entry ddns setup` 才可能保存 DNS 服务商 token、custom URL 或 custom command 到：
 
 ```text
 /etc/leikwan-toolkit/entry/ddns.env

@@ -1,6 +1,6 @@
 ﻿# 状态、快照与端口预检
 
-本文记录状态总览、快照 / 回滚、端口预检，以及 1.4.0 的 DDNS 状态集成。
+本文记录状态总览、快照 / 回滚、端口预检，以及 1.4.1 的 DDNS / IP 变化检测状态集成。
 
 ## 状态总览
 
@@ -28,19 +28,18 @@ lq --status-json
 
 缓存只记录时间、动作、结果和版本，不写 EasyTier secret。
 
-1.4.0 起，B 利群主机状态总览还会显示 DDNS scope 和三类 DDNS 状态：
+1.4.1 起，状态总览显示全局 IP 变化检测状态：
 
 ```text
-DDNS 自动刷新: active / disabled
-DDNS scopes: forwards=yes entries=yes pbr=yes
-最近 DDNS: 2026-05-10 04:12:00 / OK
-后端 DDNS: OK
-公网入口 DDNS: public3 changed，relay restart needed
-PBR DDNS: OK
+DDNS: enabled, last OK, changed 0, relay restart needed: no
+最近检测: 2026-05-10 04:12:00 / OK
+公网 IP 检测源: https://api.ipify.org
+后端域名检测: OK
+公网入口域名检测: OK
+PBR 域名检测: OK
 DDNS:
-- B 端监控: active
-- A 端更新: not configured
-- 公网入口变化: relay restart needed
+- 全局 IP 变化检测: active
+- relay restart needed: no
 最近配置导出: 2026-05-10 06:00:00 / full
 最近配置导入: 无记录
 最近端点输出: 2026-05-10 06:01:00 / forward-endpoints

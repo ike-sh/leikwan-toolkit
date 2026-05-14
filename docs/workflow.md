@@ -1,6 +1,6 @@
 ﻿# 工作流
 
-本文说明 Leikwan Toolkit 1.4.0 的推荐操作顺序。
+本文说明 Leikwan Toolkit 1.4.1 的推荐操作顺序。
 
 ## 角色
 
@@ -193,12 +193,12 @@ lq pbr domain sync
 
 ## DDNS 后端 / 公网入口 / PBR 自动刷新
 
-如果后端目标、公网入口 `public_host` 或域名 PBR 使用 DDNS 域名，建议在配置稳定后启用自动刷新：
+如果后端目标、公网入口 `public_host` 或域名 PBR 使用动态域名，建议在配置稳定后启用全局 IP 变化检测：
 
 ```bash
 lq ddns enable
 lq ddns status
-lq ddns run --scope all
+lq ddns run
 lq ddns overview
 lq ddns check-consistency
 ```
@@ -213,21 +213,18 @@ lq ddns run --scope pbr
 
 脚本会定期检查 enabled 转发目标中的域名后端、公网入口域名和域名 PBR。后端变化时更新 `resolved.tsv`、创建自动快照并安全重应用 nftables；PBR 变化时同步 `/32` 规则并应用 PBR；解析失败时保留旧 IP。
 
-公网入口 DDNS 变化默认不会自动重启 relay，只会记录 `relay restart needed`。维护窗口内执行 `lq ddns apply-entries` 可交互确认重启。原因是 relay 重启会短暂中断所有入口，而 EasyTier 运行中又不一定重新解析 peer 域名。确认可以接受维护窗口自动重启时，可设置：
+公网入口域名变化默认不会自动重启 relay，只会记录 `relay restart needed`。维护窗口内执行 `lq ddns apply-entries` 可交互确认重启。原因是 relay 重启会短暂中断所有入口，而 EasyTier 运行中又不一定重新解析 peer 域名。确认可以接受维护窗口自动重启时，可设置：
 
 ```text
-DDNS_ENTRY_AUTO_RESTART_RELAY=true
+DDNS_AUTO_RESTART_RELAY=true
 ```
 
-A 公网入口如果需要由本工具主动更新 DNS 服务商记录，在 A 上执行：
+默认不需要 Toolkit 更新 DNS 服务商记录。你的域名可以由路由器、服务商客户端、Cloudflare 或外部脚本维护；Toolkit 只检测解析变化并刷新本地配置。确实需要 Toolkit 主动改 DNS 时，才在高级兼容路径启用 `DDNS_UPDATE_DNS_RECORD=true` 并配置旧 `entry ddns`。
 
 ```bash
-lq entry ddns setup
-lq entry ddns run
-lq entry ddns enable
+lq ddns status
+lq ddns logs
 ```
-
-如果域名已经由路由器或外部 DDNS 客户端维护，可以不启用 A 端更新器；B 端监控仍可检测解析变化。
 
 forward 来源 PBR 可手动同步：
 

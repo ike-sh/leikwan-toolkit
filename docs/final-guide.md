@@ -1,6 +1,6 @@
-# Leikwan Toolkit 1.4.0 LTS 最终版使用手册
+# Leikwan Toolkit 1.4.1 LTS 最终版使用手册
 
-1.4.0 LTS 是功能冻结版。Leikwan Toolkit 的定位收敛为：
+1.4.1 LTS 是 Shell LTS 维护版。Leikwan Toolkit 的定位收敛为：
 
 ```text
 A 公网入口 + B 中转主机 + C 后端目标 的 TCP/UDP 转发组网工具
@@ -62,23 +62,25 @@ A 端负责：
 
 ```bash
 lq entry expose-range
-lq entry ddns status
+lq ddns status
 lq status
 ```
 
 ## DDNS
 
-DDNS 分成两端：
+DDNS 用户路径是“全局 IP 变化检测与自动刷新”：
 
-- A 端 DDNS：让域名指向 A 当前公网 IP。
-- B 端 DDNS：发现 entries / forwards / PBR 域名变化后刷新转发、PBR 或 relay 状态。
+- Toolkit 默认不修改 DNS 服务商记录。
+- 域名可以由路由器、服务商客户端、Cloudflare 或外部脚本维护。
+- Toolkit 检测 entries / forwards / PBR 域名变化后刷新本地转发、resolved 缓存和 PBR。
+- 公网入口域名变化时默认只标记 `relay restart needed`，不会自动重启 relay。
 
-如果 A 域名已有外部 DDNS 客户端维护，可以不启用 A 端 DDNS。
+普通用户不需要配置 DNS provider token。
 
 ```bash
-lq ddns overview
-lq ddns check-consistency
-lq ddns apply-entries
+lq ddns run
+lq ddns status
+lq ddns enable
 ```
 
 ## 高级维护
