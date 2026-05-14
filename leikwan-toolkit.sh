@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-TOOL_VERSION="1.4.0"
+TOOL_VERSION="1.4.1"
 RELEASE_CHANNEL="LTS"
 PROJECT_NAME="leikwan-toolkit"
 PROJECT_TITLE="利群快速组网工具"
@@ -35,6 +35,9 @@ DDNS_ENTRY_FAILED_COUNT=0
 DDNS_PBR_DOMAIN_COUNT=0
 DDNS_PBR_CHANGED_COUNT=0
 DDNS_PBR_FAILED_COUNT=0
+DDNS_PUBLIC_IP=""
+DDNS_PUBLIC_IP_SOURCE=""
+DDNS_PUBLIC_IP_FAILED=false
 
 LOG_FILE="${LEIKWAN_LOG_FILE:-/var/log/leikwan-toolkit.log}"
 STATE_DIR="${LEIKWAN_STATE_DIR:-/etc/leikwan-toolkit}"
@@ -55,7 +58,8 @@ SNAPSHOT_DIR="${STATE_DIR}/snapshots"
 AUTO_SNAPSHOT_DIR="${SNAPSHOT_DIR}/auto"
 REPORT_FILE="${LEIKWAN_REPORT_FILE:-/root/leikwan-debug-report.txt}"
 APPLY_RELAY_LOG="${LEIKWAN_APPLY_RELAY_LOG:-/root/lq-apply-relay.log}"
-DDNS_CONFIG="${STATE_DIR}/ddns.env"
+DDNS_CONFIG="${STATE_DIR}/ddns-global.env"
+DDNS_LEGACY_CONFIG="${STATE_DIR}/ddns.env"
 DDNS_LOG_FILE="/var/log/leikwan-ddns-refresh.log"
 DDNS_STATUS_FILE="${STATUS_DIR}/last-ddns.env"
 DDNS_SERVICE_NAME="leikwan-ddns-refresh"
@@ -140,6 +144,12 @@ DDNS_AUTO_SYNC_FORWARD_PBR_DEFAULT="true"
 DDNS_AUTO_SYNC_DOMAIN_PBR_DEFAULT="true"
 DDNS_ENTRY_AUTO_RESTART_RELAY_DEFAULT="false"
 DDNS_KEEP_OLD_ON_FAIL_DEFAULT="true"
+DDNS_GLOBAL_ENABLED_DEFAULT="false"
+DDNS_GLOBAL_INTERVAL_DEFAULT="5min"
+DDNS_AUTO_SYNC_PBR_DEFAULT="true"
+DDNS_AUTO_RESTART_RELAY_DEFAULT="false"
+DDNS_UPDATE_DNS_RECORD_DEFAULT="false"
+PUBLIC_IP_CHECK_URLS_DEFAULT="https://api.ipify.org,https://ifconfig.me/ip,https://ipv4.icanhazip.com,https://4.ipw.cn,https://ip.3322.net,https://myip.ipip.net"
 ENTRY_DDNS_ENABLED_DEFAULT="false"
 ENTRY_DDNS_PROVIDER_DEFAULT="custom-url"
 ENTRY_DDNS_INTERVAL_DEFAULT="5min"
@@ -654,15 +664,16 @@ backup_file() {
 }
 
 write_file() {
-  local path="$1" content="$2" mode="${3:-600}" tmp
+  local path="$1" content="$2" mode="${3:-600}" tmp dir
   if (( DRY_RUN == 1 )); then
     echo
     echo "${BOLD}[DRY-RUN] ${path}${RESET}"
     printf '%s\n' "$content"
     return 0
   fi
-  mkdir -p "$(dirname "$path")"
-  tmp="$(mktemp)"
+  dir="$(dirname "$path")"
+  mkdir -p "$dir"
+  tmp="$(mktemp "${dir}/.tmp.$(basename "$path").XXXXXX")"
   printf '%s\n' "$content" >"$tmp"
   if [[ -f "$path" ]] && cmp -s "$tmp" "$path"; then
     rm -f "$tmp"
@@ -748,6 +759,7 @@ ${PROJECT_NAME} $(tool_version_label)
   sudo bash leikwan-toolkit.sh update status
   sudo bash leikwan-toolkit.sh update rollback
   sudo bash leikwan-toolkit.sh ddns run
+  sudo bash leikwan-toolkit.sh ddns run --global
   sudo bash leikwan-toolkit.sh ddns run --scope forwards|entries|pbr|all
   sudo bash leikwan-toolkit.sh ddns overview
   sudo bash leikwan-toolkit.sh ddns apply-entries
@@ -773,7 +785,7 @@ ${PROJECT_NAME} $(tool_version_label)
   传输层使用 EasyTier，转发层使用 nftables。
   默认 EasyTier 虚拟网段：${ET_NET}，relay：${RELAY_ET_IP}。
   默认 EasyTier 传输：TCP+UDP / ${DEFAULT_EASYTIER_PORT}，位于利群推荐白名单 ${FAST_PORT_RANGE_START}-${FAST_PORT_RANGE_END}。
-  DDNS 自动刷新分为 A 端公网入口更新器，以及 B 端后端 / 公网入口 / PBR 域名监控。
+  DDNS 是全局 IP 变化检测与自动刷新：检测公网 IP、域名解析变化，并刷新本地转发 / PBR；默认不修改 DNS 服务商记录。
   自更新只从 GitHub Release 包更新，并校验 sha256。
   不部署后端协议，不生成代理客户端链接。
 
@@ -893,10 +905,69 @@ install_packages() {
   date '+%F %T' >"$DEPS_MARKER"
 }
 
+extract_first_ipv4() {
+  local input="$1"
+  while IFS= read -r ip; do
+    if is_ipv4 "$ip"; then
+      printf '%s' "$ip"
+      return 0
+    fi
+  done < <(printf '%s\n' "$input" | grep -Eo '([0-9]{1,3}\.){3}[0-9]{1,3}' 2>/dev/null || true)
+}
+
+public_ip_check_urls() {
+  local value="${1:-}" url
+  local -a urls
+  [[ -n "$value" ]] || value="$(ddns_config_value PUBLIC_IP_CHECK_URLS "$PUBLIC_IP_CHECK_URLS_DEFAULT" 2>/dev/null || printf '%s' "$PUBLIC_IP_CHECK_URLS_DEFAULT")"
+  value="${value//$'\n'/,}"
+  value="${value//$'\r'/,}"
+  IFS=',' read -ra urls <<<"$value"
+  for url in "${urls[@]}"; do
+    url="$(trim_spaces "$url")"
+    [[ -n "$url" ]] && printf '%s\n' "$url"
+  done
+}
+
 detect_public_ipv4() {
-  curl -4 -fsS --max-time 8 https://api.ipify.org 2>/dev/null ||
-    curl -4 -fsS --max-time 8 https://ifconfig.me 2>/dev/null ||
-    hostname -I 2>/dev/null | awk '{print $1}'
+  local urls="${1:-}" url response ip rc reason found_failure=0
+  DDNS_PUBLIC_IP=""
+  DDNS_PUBLIC_IP_SOURCE=""
+  DDNS_PUBLIC_IP_FAILED=false
+  if ! command -v curl >/dev/null 2>&1; then
+    DDNS_PUBLIC_IP_FAILED=true
+    ddns_log_quiet WARN "公网 IP 检测失败：缺少 curl。"
+    ip="$(hostname -I 2>/dev/null | awk '{print $1}')"
+    if is_ipv4 "$ip"; then
+      DDNS_PUBLIC_IP="$ip"
+      DDNS_PUBLIC_IP_SOURCE="hostname -I"
+      printf '%s' "$ip"
+      return 0
+    fi
+    return 1
+  fi
+  while IFS= read -r url; do
+    [[ -n "$url" ]] || continue
+    response="$(curl -4 -fsS --connect-timeout 5 --max-time 5 "$url" 2>&1)"
+    rc=$?
+    if (( rc == 0 )); then
+      ip="$(extract_first_ipv4 "$response")"
+      if [[ -n "$ip" ]]; then
+        DDNS_PUBLIC_IP="$ip"
+        DDNS_PUBLIC_IP_SOURCE="$url"
+        printf '%s' "$ip"
+        return 0
+      fi
+      found_failure=1
+      ddns_log_quiet WARN "公网 IP 检测源返回无效响应：${url}"
+    else
+      found_failure=1
+      reason="$(printf '%s' "$response" | tr '\r\n' '  ' | cut -c1-160)"
+      ddns_log_quiet WARN "公网 IP 检测源失败：${url} ${reason:-curl rc=${rc}}"
+    fi
+  done < <(public_ip_check_urls "$urls")
+  DDNS_PUBLIC_IP_FAILED=true
+  (( found_failure == 1 )) && ddns_log_quiet WARN "公网 IP 检测全部失败；保留现有配置。"
+  return 1
 }
 
 env_file_get() {
@@ -4913,13 +4984,14 @@ entry_ddns_run() {
   enabled="$(entry_ddns_config_value ENTRY_DDNS_ENABLED "$ENTRY_DDNS_ENABLED_DEFAULT")"
   host="$(entry_ddns_config_value ENTRY_DDNS_HOST "")"
   provider="$(entry_ddns_config_value ENTRY_DDNS_PROVIDER "$ENTRY_DDNS_PROVIDER_DEFAULT")"
+  entry_ddns_emit WARN "该命令为兼容入口，普通用户建议使用 lq ddns run。"
   if ! entry_ddns_config_bool ENTRY_DDNS_ENABLED "$ENTRY_DDNS_ENABLED_DEFAULT"; then
     if (( non_interactive == 1 )); then
-      entry_ddns_emit INFO "A 端 DDNS 更新器未启用，跳过。"
+      entry_ddns_emit INFO "兼容 DNS 更新入口未启用，跳过。"
       entry_ddns_write_last_status "skipped" "$host" "" "" "false" "$provider" ""
       return 0
     fi
-    entry_ddns_emit WARN "A 端 DDNS 更新器未启用，本次仅按当前配置手动执行。"
+    entry_ddns_emit WARN "兼容 DNS 更新入口未启用，本次仅按当前配置手动执行。"
   fi
   [[ -n "$host" ]] || { entry_ddns_emit FAIL "ENTRY_DDNS_HOST 为空，请先执行：lq entry ddns setup"; entry_ddns_write_last_status "fail" "" "" "" "false" "$provider" ""; return 1; }
   is_domain_name "$host" || { entry_ddns_emit FAIL "ENTRY_DDNS_HOST 必须是域名，不能是纯 IPv4：${host}"; entry_ddns_write_last_status "fail" "$host" "" "" "false" "$provider" ""; return 1; }
@@ -4938,6 +5010,11 @@ entry_ddns_run() {
     entry_ddns_write_config "$enabled" "$host" "$provider" "$(entry_ddns_config_value ENTRY_DDNS_UPDATE_URL "")" "$(entry_ddns_config_value ENTRY_DDNS_UPDATE_CMD "")" "$(entry_ddns_config_value ENTRY_DDNS_TOKEN "")" "$public_ip" "$(entry_ddns_config_value ENTRY_DDNS_INTERVAL "$ENTRY_DDNS_INTERVAL_DEFAULT")" "$(entry_ddns_config_value ENTRY_DDNS_IP_SOURCE "$ENTRY_DDNS_IP_SOURCE_DEFAULT")"
     entry_ddns_write_last_status "ok" "$host" "$public_ip" "$resolved_ip" "false" "$provider" "$public_ip"
     return 0
+  fi
+  if ! ddns_config_bool DDNS_UPDATE_DNS_RECORD "$DDNS_UPDATE_DNS_RECORD_DEFAULT"; then
+    entry_ddns_emit INFO "DDNS_UPDATE_DNS_RECORD=false，默认不修改 DNS 服务商记录。"
+    entry_ddns_write_last_status "warn" "$host" "$public_ip" "$resolved_ip" "true" "$provider" "$(entry_ddns_config_value ENTRY_DDNS_LAST_IP "")"
+    return 1
   fi
   if [[ -z "$resolved_ip" ]]; then
     entry_ddns_emit WARN "域名当前解析失败，将尝试更新 DDNS。"
@@ -4981,10 +5058,10 @@ entry_ddns_status() {
   last_public="$(entry_ddns_status_value LAST_ENTRY_DDNS_PUBLIC_IP)"
   last_resolved="$(entry_ddns_status_value LAST_ENTRY_DDNS_RESOLVED_IP)"
   last_changed="$(entry_ddns_status_value LAST_ENTRY_DDNS_CHANGED)"
-  echo "A 端公网入口 DDNS 状态"
+  echo "兼容 DNS 更新状态"
   echo "----------------------------------------"
   if [[ "$configured" == "no" ]]; then
-    echo "[INFO] 未配置 A 端 DDNS 更新器。"
+    echo "[INFO] 未配置兼容 DNS 更新入口。"
     echo "[INFO] 如果公网入口域名由外部 DDNS 客户端维护，可忽略。"
   fi
   echo "enabled: $(bool_enabled_disabled "$enabled")"
@@ -5023,12 +5100,15 @@ entry_ddns_setup() {
   local default_host host provider_choice provider update_url="" update_cmd="" interval enabled
   entry_ddns_current_config_summary
   echo
-  echo "A 端 DDNS 的作用："
-  echo "把本机当前公网 IP 更新到公网入口域名。"
-  echo "B 利群主机只负责检测该域名解析变化，不能替 A 端更新 DNS 服务商记录。"
+  warn "该命令为兼容入口，普通用户建议使用 lq ddns run。"
+  warn "默认 DDNS_UPDATE_DNS_RECORD=false，不需要 DNS provider token。"
+  echo "兼容 DNS 更新的作用："
+  echo "把本机当前公网 IP 写入指定 DNS 记录。"
+  echo "全局 IP 变化检测只负责检测域名解析变化并刷新本地配置。"
+  echo "这是高级兼容能力，不是默认路径。"
   echo
   entry_ddns_ensure_config
-  warn "A 端 DDNS 配置可能包含 DNS 服务商 token，会保存在 ${ENTRY_DDNS_CONFIG}。"
+  warn "兼容 DNS 更新配置可能包含 DNS 服务商 token，会保存在 ${ENTRY_DDNS_CONFIG}。"
   default_host="$(entry_ddns_config_value ENTRY_DDNS_HOST "$(current_entry_configured_public_host)")"
   host="$(prompt_value "公网入口域名" "$default_host")"
   [[ -n "$host" ]] || { warn "未填写域名，已取消。"; return 0; }
@@ -5065,10 +5145,10 @@ entry_ddns_setup() {
   esac
   interval="$(prompt_value "刷新间隔" "$(entry_ddns_config_value ENTRY_DDNS_INTERVAL "$ENTRY_DDNS_INTERVAL_DEFAULT")")"
   [[ -n "$interval" ]] || interval="$ENTRY_DDNS_INTERVAL_DEFAULT"
-  if prompt_yes_no "是否启用 A 端 DDNS 更新器？" "N"; then enabled="true"; else enabled="false"; fi
+  if prompt_yes_no "是否启用兼容 DNS 更新入口？" "N"; then enabled="true"; else enabled="false"; fi
   entry_ddns_write_config "$enabled" "$host" "$provider" "$update_url" "$update_cmd" "$(entry_ddns_config_value ENTRY_DDNS_TOKEN "")" "$(entry_ddns_config_value ENTRY_DDNS_LAST_IP "")" "$interval" "$(entry_ddns_config_value ENTRY_DDNS_IP_SOURCE "$ENTRY_DDNS_IP_SOURCE_DEFAULT")"
-  ok "A 端 DDNS 配置已保存：${ENTRY_DDNS_CONFIG}"
-  if prompt_yes_no "是否立即启用 A 端 DDNS 定时器？" "N"; then
+  ok "兼容 DNS 更新配置已保存：${ENTRY_DDNS_CONFIG}"
+  if prompt_yes_no "是否立即启用兼容 DNS 更新定时器？" "N"; then
     entry_ddns_enable_timer
   fi
   echo "下一步："
@@ -5129,9 +5209,9 @@ entry_ddns_enable_timer() {
   entry_ddns_install_units
   if command -v systemctl >/dev/null 2>&1; then
     systemctl enable --now "${ENTRY_DDNS_SERVICE_NAME}.timer"
-    ok "A 端 DDNS timer 已启用。"
+    ok "兼容 DNS 更新 timer 已启用。"
   else
-    warn "未找到 systemctl，无法启用 A 端 DDNS timer。"
+    warn "未找到 systemctl，无法启用兼容 DNS 更新 timer。"
     return 1
   fi
 }
@@ -5143,9 +5223,9 @@ entry_ddns_disable_timer() {
   fi
   if command -v systemctl >/dev/null 2>&1; then
     systemctl disable --now "${ENTRY_DDNS_SERVICE_NAME}.timer" 2>/dev/null || true
-    ok "A 端 DDNS timer 已禁用。"
+    ok "兼容 DNS 更新 timer 已禁用。"
   else
-    warn "未找到 systemctl，无法禁用 A 端 DDNS timer。"
+    warn "未找到 systemctl，无法禁用兼容 DNS 更新 timer。"
   fi
 }
 
@@ -5153,7 +5233,7 @@ entry_ddns_logs() {
   if [[ -f "$ENTRY_DDNS_LOG_FILE" ]]; then
     tail -n 100 "$ENTRY_DDNS_LOG_FILE"
   else
-    info "暂无 A 端 DDNS 日志：${ENTRY_DDNS_LOG_FILE}"
+    info "暂无兼容 DNS 更新日志：${ENTRY_DDNS_LOG_FILE}"
   fi
 }
 
@@ -5166,7 +5246,7 @@ entry_ddns_current_config_summary() {
   provider="$(entry_ddns_config_value ENTRY_DDNS_PROVIDER "")"
   timer_state="$(entry_ddns_timer_state)"
   [[ "$timer_state" == "unknown" ]] && timer_state="inactive"
-  echo "A 端公网入口 DDNS 当前配置"
+  echo "兼容 DNS 更新当前配置"
   echo "----------------------------------------"
   if [[ "$configured" == "no" ]]; then
     echo "状态: disabled"
@@ -5184,6 +5264,7 @@ entry_ddns_current_config_summary() {
 ddns_config_value() {
   local key="$1" default="$2" value
   value="$(env_file_get "$DDNS_CONFIG" "$key")"
+  [[ -n "$value" ]] || value="$(env_file_get "$DDNS_LEGACY_CONFIG" "$key")"
   printf '%s' "${value:-$default}"
 }
 
@@ -5232,13 +5313,27 @@ ddns_write_config() {
   local auto_fix="${6:-$(ddns_config_value DDNS_AUTO_FIX_ROUTE "$DDNS_AUTO_FIX_ROUTE_DEFAULT")}"
   local auto_sync_forward_pbr="${7:-$(ddns_config_value DDNS_AUTO_SYNC_FORWARD_PBR "$(ddns_config_value DDNS_AUTO_SYNC_PBR "$DDNS_AUTO_SYNC_FORWARD_PBR_DEFAULT")")}"
   local auto_sync_domain_pbr="${8:-$(ddns_config_value DDNS_AUTO_SYNC_DOMAIN_PBR "$DDNS_AUTO_SYNC_DOMAIN_PBR_DEFAULT")}"
-  local entry_auto_restart="${9:-$(ddns_config_value DDNS_ENTRY_AUTO_RESTART_RELAY "$DDNS_ENTRY_AUTO_RESTART_RELAY_DEFAULT")}"
+  local entry_auto_restart="${9:-$(ddns_config_value DDNS_AUTO_RESTART_RELAY "$(ddns_config_value DDNS_ENTRY_AUTO_RESTART_RELAY "$DDNS_ENTRY_AUTO_RESTART_RELAY_DEFAULT")")}"
   local keep_old="${10:-$(ddns_config_value DDNS_KEEP_OLD_ON_FAIL "$DDNS_KEEP_OLD_ON_FAIL_DEFAULT")}"
-  write_file "$DDNS_CONFIG" "DDNS_REFRESH_INTERVAL=${interval}
+  local public_ip_urls update_dns domains enabled auto_sync_pbr
+  enabled="$(ddns_config_value DDNS_GLOBAL_ENABLED "$DDNS_GLOBAL_ENABLED_DEFAULT")"
+  domains="$(ddns_config_value DDNS_GLOBAL_DOMAINS "")"
+  public_ip_urls="$(ddns_config_value PUBLIC_IP_CHECK_URLS "$PUBLIC_IP_CHECK_URLS_DEFAULT")"
+  auto_sync_pbr="$(ddns_config_value DDNS_AUTO_SYNC_PBR "$DDNS_AUTO_SYNC_PBR_DEFAULT")"
+  update_dns="$(ddns_config_value DDNS_UPDATE_DNS_RECORD "$DDNS_UPDATE_DNS_RECORD_DEFAULT")"
+  write_file "$DDNS_CONFIG" "DDNS_GLOBAL_ENABLED=${enabled}
+DDNS_GLOBAL_INTERVAL=${interval}
+DDNS_GLOBAL_DOMAINS=${domains}
+PUBLIC_IP_CHECK_URLS=${public_ip_urls}
+DDNS_AUTO_APPLY=${auto_apply}
+DDNS_AUTO_SYNC_PBR=${auto_sync_pbr}
+DDNS_AUTO_RESTART_RELAY=${entry_auto_restart}
+DDNS_KEEP_OLD_ON_FAIL=${keep_old}
+DDNS_UPDATE_DNS_RECORD=${update_dns}
+DDNS_REFRESH_INTERVAL=${interval}
 DDNS_REFRESH_FORWARDS=${refresh_forwards}
 DDNS_REFRESH_ENTRIES=${refresh_entries}
 DDNS_REFRESH_PBR=${refresh_pbr}
-DDNS_AUTO_APPLY=${auto_apply}
 DDNS_AUTO_FIX_ROUTE=${auto_fix}
 DDNS_AUTO_SYNC_FORWARD_PBR=${auto_sync_forward_pbr}
 DDNS_AUTO_SYNC_DOMAIN_PBR=${auto_sync_domain_pbr}
@@ -5251,7 +5346,13 @@ ddns_ensure_config() {
     ddns_write_config "$DDNS_REFRESH_INTERVAL_DEFAULT" "$DDNS_REFRESH_FORWARDS_DEFAULT" "$DDNS_REFRESH_ENTRIES_DEFAULT" "$DDNS_REFRESH_PBR_DEFAULT" "$DDNS_AUTO_APPLY_DEFAULT" "$DDNS_AUTO_FIX_ROUTE_DEFAULT" "$DDNS_AUTO_SYNC_FORWARD_PBR_DEFAULT" "$DDNS_AUTO_SYNC_DOMAIN_PBR_DEFAULT" "$DDNS_ENTRY_AUTO_RESTART_RELAY_DEFAULT" "$DDNS_KEEP_OLD_ON_FAIL_DEFAULT"
     return 0
   fi
-  if ! grep -q '^DDNS_REFRESH_FORWARDS=' "$DDNS_CONFIG" 2>/dev/null ||
+  if ! grep -q '^DDNS_GLOBAL_ENABLED=' "$DDNS_CONFIG" 2>/dev/null ||
+    ! grep -q '^DDNS_GLOBAL_INTERVAL=' "$DDNS_CONFIG" 2>/dev/null ||
+    ! grep -q '^PUBLIC_IP_CHECK_URLS=' "$DDNS_CONFIG" 2>/dev/null ||
+    ! grep -q '^DDNS_AUTO_SYNC_PBR=' "$DDNS_CONFIG" 2>/dev/null ||
+    ! grep -q '^DDNS_AUTO_RESTART_RELAY=' "$DDNS_CONFIG" 2>/dev/null ||
+    ! grep -q '^DDNS_UPDATE_DNS_RECORD=' "$DDNS_CONFIG" 2>/dev/null ||
+    ! grep -q '^DDNS_REFRESH_FORWARDS=' "$DDNS_CONFIG" 2>/dev/null ||
     ! grep -q '^DDNS_REFRESH_ENTRIES=' "$DDNS_CONFIG" 2>/dev/null ||
     ! grep -q '^DDNS_REFRESH_PBR=' "$DDNS_CONFIG" 2>/dev/null ||
     ! grep -q '^DDNS_AUTO_SYNC_FORWARD_PBR=' "$DDNS_CONFIG" 2>/dev/null ||
@@ -5271,6 +5372,20 @@ ddns_emit() {
   esac
   echo "$line"
   if (( DRY_RUN == 0 )) && [[ ${EUID:-$(id -u)} -eq 0 ]]; then
+    mkdir -p "$(dirname "$DDNS_LOG_FILE")" 2>/dev/null || true
+    printf '[%s] %s\n' "$(status_now)" "$line" >>"$DDNS_LOG_FILE" 2>/dev/null || true
+  fi
+}
+
+ddns_log_quiet() {
+  local level="$1" msg="$2" line
+  case "$level" in
+    OK) line="[OK] ${msg}" ;;
+    WARN) line="[WARN] ${msg}" ;;
+    FAIL) line="[FAIL] ${msg}" ;;
+    *) line="[INFO] ${msg}" ;;
+  esac
+  if (( DRY_RUN == 0 )) && (( LOG_DISABLED == 0 )) && [[ ${EUID:-$(id -u)} -eq 0 ]]; then
     mkdir -p "$(dirname "$DDNS_LOG_FILE")" 2>/dev/null || true
     printf '[%s] %s\n' "$(status_now)" "$line" >>"$DDNS_LOG_FILE" 2>/dev/null || true
   fi
@@ -5297,8 +5412,11 @@ ddns_action_text() {
 ddns_print_summary() {
   local result="$1"
   ddns_output_line ""
-  ddns_output_line "DDNS 检测摘要"
+  ddns_output_line "全局 IP 变化检测摘要"
   ddns_output_line "----------------------------------------"
+  ddns_output_line "本机公网 IP: ${DDNS_PUBLIC_IP:-未检测}"
+  ddns_output_line "公网 IP 检测源: ${DDNS_PUBLIC_IP_SOURCE:-"-"}"
+  ddns_output_line ""
   ddns_output_line "后端转发："
   ddns_output_line "- 检查 ${DDNS_FORWARD_CHECKED}"
   ddns_output_line "- 域名 ${DDNS_FORWARD_DOMAIN_COUNT}"
@@ -5368,6 +5486,7 @@ ddns_write_last_status() {
   local result="$1" scope="$2"
   local forward_changed="$3" forward_failed="$4" entry_changed="$5" entry_failed="$6" pbr_changed="$7" pbr_failed="$8"
   local relay_restart_needed="$9" nft_applied="${10}" pbr_applied="${11}" relay_restarted="${12}"
+  local public_ip="${13:-${DDNS_PUBLIC_IP:-}}" public_ip_source="${14:-${DDNS_PUBLIC_IP_SOURCE:-}}"
   (( DRY_RUN == 1 )) && return 0
   [[ ${EUID:-$(id -u)} -eq 0 ]] || return 0
   mkdir -p "$STATUS_DIR" 2>/dev/null || return 0
@@ -5375,12 +5494,20 @@ ddns_write_last_status() {
     printf 'LAST_DDNS_TIME=%s\n' "$(status_now)"
     printf 'LAST_DDNS_RESULT=%s\n' "$result"
     printf 'LAST_DDNS_SCOPE=%s\n' "$scope"
+    printf 'LAST_DDNS_PUBLIC_IP=%s\n' "$public_ip"
+    printf 'LAST_DDNS_PUBLIC_IP_SOURCE=%s\n' "$public_ip_source"
     printf 'LAST_DDNS_FORWARD_CHANGED=%s\n' "$forward_changed"
     printf 'LAST_DDNS_FORWARD_FAILED=%s\n' "$forward_failed"
+    printf 'LAST_DDNS_FORWARD_CHECKED=%s\n' "$DDNS_FORWARD_DOMAIN_COUNT"
+    printf 'LAST_DDNS_FORWARD_FAILED_COUNT=%s\n' "$DDNS_FORWARD_FAILED_COUNT"
     printf 'LAST_DDNS_ENTRY_CHANGED=%s\n' "$entry_changed"
     printf 'LAST_DDNS_ENTRY_FAILED=%s\n' "$entry_failed"
+    printf 'LAST_DDNS_ENTRY_CHECKED=%s\n' "$DDNS_ENTRY_DOMAIN_COUNT"
+    printf 'LAST_DDNS_ENTRY_FAILED_COUNT=%s\n' "$DDNS_ENTRY_FAILED_COUNT"
     printf 'LAST_DDNS_PBR_CHANGED=%s\n' "$pbr_changed"
     printf 'LAST_DDNS_PBR_FAILED=%s\n' "$pbr_failed"
+    printf 'LAST_DDNS_PBR_CHECKED=%s\n' "$DDNS_PBR_DOMAIN_COUNT"
+    printf 'LAST_DDNS_PBR_FAILED_COUNT=%s\n' "$DDNS_PBR_FAILED_COUNT"
     printf 'LAST_DDNS_RELAY_RESTART_NEEDED=%s\n' "$relay_restart_needed"
     printf 'LAST_DDNS_NFT_APPLIED=%s\n' "$nft_applied"
     printf 'LAST_DDNS_PBR_APPLIED=%s\n' "$pbr_applied"
@@ -5584,8 +5711,8 @@ ddns_maybe_restart_relay() {
       ddns_emit INFO "已记录公网入口 DDNS 变化，但未重启 relay。"
       ddns_emit INFO "可在维护窗口执行：利群主机 -> EasyTier 组网管理 -> 启动 / 重启 relay 服务"
     fi
-  elif ddns_config_bool DDNS_ENTRY_AUTO_RESTART_RELAY "$DDNS_ENTRY_AUTO_RESTART_RELAY_DEFAULT"; then
-    ddns_emit INFO "DDNS_ENTRY_AUTO_RESTART_RELAY=true，正在自动重启 relay。"
+  elif ddns_config_bool DDNS_AUTO_RESTART_RELAY "$(ddns_config_value DDNS_ENTRY_AUTO_RESTART_RELAY "$DDNS_ENTRY_AUTO_RESTART_RELAY_DEFAULT")"; then
+    ddns_emit INFO "DDNS_AUTO_RESTART_RELAY=true，正在自动重启 relay。"
     if ddns_auto_snapshot && apply_easytier_relay_service confirmed; then
       DDNS_RELAY_RESTARTED=true
       ddns_emit OK "已自动重启 relay。"
@@ -5602,11 +5729,12 @@ ddns_refresh_once() {
   need_root_unless_dry_run
   ensure_base_dirs
   ddns_ensure_config
-  local scope="all" non_interactive=0 no_restart=0 arg ddns_lock="" result="ok" auto_apply auto_fix
+  local scope="all" non_interactive=0 no_restart=0 arg ddns_lock="" result="ok" auto_apply auto_fix public_ip
   while (($# > 0)); do
     arg="$1"
     case "$arg" in
       --scope) scope="${2:-all}"; shift 2 ;;
+      --global) scope="all"; shift ;;
       --non-interactive) non_interactive=1; shift ;;
       --no-restart) no_restart=1; shift ;;
       *) fail "未知 ddns run 参数：${arg}"; return 1 ;;
@@ -5633,7 +5761,16 @@ ddns_refresh_once() {
     ddns_write_last_status "skipped" "$scope" "" "" "" "" "" "" false false false false
     return 0
   fi
-  ddns_emit INFO "DDNS 刷新开始，scope=${scope}。"
+  ddns_emit INFO "全局 IP 变化检测开始，scope=${scope}。"
+  public_ip="$(detect_public_ipv4 2>/dev/null || true)"
+  if [[ -n "$public_ip" ]]; then
+    DDNS_PUBLIC_IP="$public_ip"
+    ddns_emit OK "本机公网 IP：${DDNS_PUBLIC_IP}（${DDNS_PUBLIC_IP_SOURCE:-unknown}）"
+  else
+    DDNS_PUBLIC_IP_FAILED=true
+    result="warn"
+    ddns_emit WARN "本机公网 IP 检测失败，继续检测域名解析变化并保留现有配置。"
+  fi
   auto_apply="$(ddns_config_value DDNS_AUTO_APPLY "$DDNS_AUTO_APPLY_DEFAULT")"
   auto_fix="$(ddns_config_value DDNS_AUTO_FIX_ROUTE "$DDNS_AUTO_FIX_ROUTE_DEFAULT")"
   if ddns_scope_requested "$scope" forwards; then
@@ -5725,32 +5862,38 @@ ddns_refresh_once() {
     ddns_print_entry_detection_section
   fi
   ddns_write_last_status "$result" "$scope" "$DDNS_FORWARD_CHANGED" "$DDNS_FORWARD_FAILED" "$DDNS_ENTRY_CHANGED" "$DDNS_ENTRY_FAILED" "$DDNS_PBR_CHANGED" "$DDNS_PBR_FAILED" "$DDNS_RELAY_RESTART_NEEDED" "$DDNS_NFT_APPLIED" "$DDNS_PBR_APPLIED" "$DDNS_RELAY_RESTARTED"
-  ddns_emit INFO "DDNS 刷新结束：$(status_result_display "$result")。"
+  ddns_emit INFO "全局 IP 变化检测结束：$(status_result_display "$result")。"
   global_lock_release
   lock_release "$ddns_lock"
 }
 
 render_ddns_service() {
+  local exec_path="/root/leikwan-toolkit.sh"
+  if [[ -x "$SHORTCUT_LQ" ]]; then
+    exec_path="$SHORTCUT_LQ"
+  elif [[ -n "${BASH_SOURCE[0]:-}" && -f "${BASH_SOURCE[0]}" ]]; then
+    exec_path="${BASH_SOURCE[0]}"
+  fi
   cat <<EOF
 # Managed by leikwan-toolkit ${TOOL_VERSION}
 [Unit]
-Description=Leikwan DDNS backend / entry / PBR refresh
+Description=Leikwan global IP change detection refresh
 After=network-online.target
 Wants=network-online.target
 
 [Service]
 Type=oneshot
-ExecStart=/root/leikwan-toolkit.sh ddns run --non-interactive
+ExecStart=${exec_path} ddns run --global --non-interactive
 EOF
 }
 
 render_ddns_timer() {
   local interval
-  interval="$(ddns_config_value DDNS_REFRESH_INTERVAL "$DDNS_REFRESH_INTERVAL_DEFAULT")"
+  interval="$(ddns_config_value DDNS_GLOBAL_INTERVAL "$(ddns_config_value DDNS_REFRESH_INTERVAL "$DDNS_GLOBAL_INTERVAL_DEFAULT")")"
   cat <<EOF
 # Managed by leikwan-toolkit ${TOOL_VERSION}
 [Unit]
-Description=Leikwan DDNS backend / entry / PBR refresh timer
+Description=Leikwan global IP change detection timer
 
 [Timer]
 OnBootSec=2min
@@ -5775,12 +5918,27 @@ ddns_install_units() {
 ddns_enable_timer() {
   need_root_unless_dry_run
   ddns_ensure_config
+  ddns_write_config "$(ddns_config_value DDNS_GLOBAL_INTERVAL "$(ddns_config_value DDNS_REFRESH_INTERVAL "$DDNS_GLOBAL_INTERVAL_DEFAULT")")" \
+    "$(ddns_config_value DDNS_REFRESH_FORWARDS "$DDNS_REFRESH_FORWARDS_DEFAULT")" \
+    "$(ddns_config_value DDNS_REFRESH_ENTRIES "$DDNS_REFRESH_ENTRIES_DEFAULT")" \
+    "$(ddns_config_value DDNS_REFRESH_PBR "$DDNS_REFRESH_PBR_DEFAULT")" \
+    "$(ddns_config_value DDNS_AUTO_APPLY "$DDNS_AUTO_APPLY_DEFAULT")" \
+    "$(ddns_config_value DDNS_AUTO_FIX_ROUTE "$DDNS_AUTO_FIX_ROUTE_DEFAULT")" \
+    "$(ddns_config_value DDNS_AUTO_SYNC_FORWARD_PBR "$(ddns_config_value DDNS_AUTO_SYNC_PBR "$DDNS_AUTO_SYNC_FORWARD_PBR_DEFAULT")")" \
+    "$(ddns_config_value DDNS_AUTO_SYNC_DOMAIN_PBR "$DDNS_AUTO_SYNC_DOMAIN_PBR_DEFAULT")" \
+    "$(ddns_config_value DDNS_AUTO_RESTART_RELAY "$(ddns_config_value DDNS_ENTRY_AUTO_RESTART_RELAY "$DDNS_ENTRY_AUTO_RESTART_RELAY_DEFAULT")")" \
+    "$(ddns_config_value DDNS_KEEP_OLD_ON_FAIL "$DDNS_KEEP_OLD_ON_FAIL_DEFAULT")"
+  if (( DRY_RUN == 0 )); then
+    if grep -q '^DDNS_GLOBAL_ENABLED=' "$DDNS_CONFIG" 2>/dev/null; then
+      sed -i 's/^DDNS_GLOBAL_ENABLED=.*/DDNS_GLOBAL_ENABLED=true/' "$DDNS_CONFIG" 2>/dev/null || true
+    fi
+  fi
   ddns_install_units
-  info "将每 $(ddns_config_value DDNS_REFRESH_INTERVAL "$DDNS_REFRESH_INTERVAL_DEFAULT") 刷新 enabled 后端转发目标、公网入口和域名 PBR。"
-  warn "公网入口 DDNS 变化默认只记录 relay restart needed，不会自动中断 relay。"
+  info "将每 $(ddns_config_value DDNS_GLOBAL_INTERVAL "$(ddns_config_value DDNS_REFRESH_INTERVAL "$DDNS_REFRESH_INTERVAL_DEFAULT")") 执行全局 IP 变化检测。"
+  warn "默认不修改 DNS 服务商记录，relay 也不会自动重启。"
   if command -v systemctl >/dev/null 2>&1; then
     systemctl enable --now "${DDNS_SERVICE_NAME}.timer"
-    ok "DDNS 自动刷新 timer 已启用。"
+    ok "全局 IP 变化检测 timer 已启用。"
   else
     warn "未找到 systemctl，无法启用 DDNS timer。"
     return 1
@@ -5789,30 +5947,34 @@ ddns_enable_timer() {
 
 ddns_disable_timer() {
   need_root_unless_dry_run
+  if [[ -f "$DDNS_CONFIG" ]] && (( DRY_RUN == 0 )); then
+    sed -i 's/^DDNS_GLOBAL_ENABLED=.*/DDNS_GLOBAL_ENABLED=false/' "$DDNS_CONFIG" 2>/dev/null || true
+  fi
   if command -v systemctl >/dev/null 2>&1; then
     systemctl disable --now "${DDNS_SERVICE_NAME}.timer" 2>/dev/null || true
-    ok "DDNS 自动刷新 timer 已禁用。"
+    ok "全局 IP 变化检测 timer 已禁用。"
   else
     warn "未找到 systemctl，无法禁用 DDNS timer。"
   fi
 }
 
 ddns_status() {
-  local timer_state interval refresh_forwards refresh_entries refresh_pbr auto_apply auto_sync_forward_pbr auto_sync_domain_pbr entry_auto_restart
+  local timer_state interval auto_enabled update_dns
   local last_time last_result last_scope forward_changed forward_failed entry_changed entry_failed pbr_changed pbr_failed
-  local relay_restart_needed nft_applied pbr_applied relay_restarted forward_count entry_count pbr_count forward_checked entry_checked
+  local relay_restart_needed nft_applied pbr_applied relay_restarted public_ip public_ip_source
+  local forward_count entry_count pbr_count forward_checked entry_checked pbr_checked
+  local forward_changed_count forward_failed_count entry_changed_count entry_failed_count pbr_changed_count pbr_failed_count
+  local nft_text pbr_text
   timer_state="$(ddns_timer_state)"
-  interval="$(ddns_config_value DDNS_REFRESH_INTERVAL "$DDNS_REFRESH_INTERVAL_DEFAULT")"
-  refresh_forwards="$(ddns_config_value DDNS_REFRESH_FORWARDS "$DDNS_REFRESH_FORWARDS_DEFAULT")"
-  refresh_entries="$(ddns_config_value DDNS_REFRESH_ENTRIES "$DDNS_REFRESH_ENTRIES_DEFAULT")"
-  refresh_pbr="$(ddns_config_value DDNS_REFRESH_PBR "$DDNS_REFRESH_PBR_DEFAULT")"
-  auto_apply="$(ddns_config_value DDNS_AUTO_APPLY "$DDNS_AUTO_APPLY_DEFAULT")"
-  auto_sync_forward_pbr="$(ddns_config_value DDNS_AUTO_SYNC_FORWARD_PBR "$(ddns_config_value DDNS_AUTO_SYNC_PBR "$DDNS_AUTO_SYNC_FORWARD_PBR_DEFAULT")")"
-  auto_sync_domain_pbr="$(ddns_config_value DDNS_AUTO_SYNC_DOMAIN_PBR "$DDNS_AUTO_SYNC_DOMAIN_PBR_DEFAULT")"
-  entry_auto_restart="$(ddns_config_value DDNS_ENTRY_AUTO_RESTART_RELAY "$DDNS_ENTRY_AUTO_RESTART_RELAY_DEFAULT")"
+  interval="$(ddns_config_value DDNS_GLOBAL_INTERVAL "$(ddns_config_value DDNS_REFRESH_INTERVAL "$DDNS_REFRESH_INTERVAL_DEFAULT")")"
+  auto_enabled="$(ddns_config_value DDNS_GLOBAL_ENABLED "$DDNS_GLOBAL_ENABLED_DEFAULT")"
+  [[ "$timer_state" == "active" ]] && auto_enabled="true"
+  update_dns="$(ddns_config_value DDNS_UPDATE_DNS_RECORD "$DDNS_UPDATE_DNS_RECORD_DEFAULT")"
   last_time="$(env_file_get "$DDNS_STATUS_FILE" LAST_DDNS_TIME)"
   last_result="$(env_file_get "$DDNS_STATUS_FILE" LAST_DDNS_RESULT)"
   last_scope="$(env_file_get "$DDNS_STATUS_FILE" LAST_DDNS_SCOPE)"
+  public_ip="$(env_file_get "$DDNS_STATUS_FILE" LAST_DDNS_PUBLIC_IP)"
+  public_ip_source="$(env_file_get "$DDNS_STATUS_FILE" LAST_DDNS_PUBLIC_IP_SOURCE)"
   forward_changed="$(env_file_get "$DDNS_STATUS_FILE" LAST_DDNS_FORWARD_CHANGED)"
   forward_failed="$(env_file_get "$DDNS_STATUS_FILE" LAST_DDNS_FORWARD_FAILED)"
   entry_changed="$(env_file_get "$DDNS_STATUS_FILE" LAST_DDNS_ENTRY_CHANGED)"
@@ -5826,84 +5988,48 @@ ddns_status() {
   forward_count="$(ddns_domain_forward_count 2>/dev/null || printf '0')"
   entry_count="$(ddns_domain_entry_count 2>/dev/null || printf '0')"
   pbr_count="$(ddns_domain_pbr_count 2>/dev/null || printf '0')"
-  forward_checked="$(forwards_rows | awk -F'\t' '$7=="true"{c++} END{print c+0}')"
-  entry_checked="$(entries_rows | awk -F'\t' '$7=="true"{c++} END{print c+0}')"
-  echo "DDNS 自动刷新状态"
+  forward_checked="$(env_file_get "$DDNS_STATUS_FILE" LAST_DDNS_FORWARD_CHECKED)"
+  entry_checked="$(env_file_get "$DDNS_STATUS_FILE" LAST_DDNS_ENTRY_CHECKED)"
+  pbr_checked="$(env_file_get "$DDNS_STATUS_FILE" LAST_DDNS_PBR_CHECKED)"
+  [[ -n "$forward_checked" ]] || forward_checked="$forward_count"
+  [[ -n "$entry_checked" ]] || entry_checked="$entry_count"
+  [[ -n "$pbr_checked" ]] || pbr_checked="$pbr_count"
+  forward_changed_count="$(csv_count "$forward_changed")"
+  forward_failed_count="$(env_file_get "$DDNS_STATUS_FILE" LAST_DDNS_FORWARD_FAILED_COUNT)"
+  [[ -n "$forward_failed_count" ]] || forward_failed_count="$(csv_count "$forward_failed")"
+  entry_changed_count="$(csv_count "$entry_changed")"
+  entry_failed_count="$(env_file_get "$DDNS_STATUS_FILE" LAST_DDNS_ENTRY_FAILED_COUNT)"
+  [[ -n "$entry_failed_count" ]] || entry_failed_count="$(csv_count "$entry_failed")"
+  pbr_changed_count="$(csv_count "$pbr_changed")"
+  pbr_failed_count="$(env_file_get "$DDNS_STATUS_FILE" LAST_DDNS_PBR_FAILED_COUNT)"
+  [[ -n "$pbr_failed_count" ]] || pbr_failed_count="$(csv_count "$pbr_failed")"
+  nft_text="$(ddns_action_text "${nft_applied:-false}" "已重应用" "待重应用" "无需重应用")"
+  pbr_text="$(ddns_action_text "${pbr_applied:-false}" "已同步" "待同步" "无需同步")"
+  if [[ "${last_result,,}" == "fail" && "${nft_applied:-false}" != "true" && -n "$forward_changed" ]]; then
+    nft_text="失败"
+  fi
+  if [[ "${last_result,,}" == "fail" && "${pbr_applied:-false}" != "true" && -n "$pbr_changed" ]]; then
+    pbr_text="失败"
+  fi
+  echo "DDNS / IP 变化检测状态"
   echo "----------------------------------------"
-  echo "timer: ${timer_state}"
-  echo "interval: ${interval}"
-  echo "forwards: $(bool_enabled_disabled "$refresh_forwards") (${forward_count})"
-  echo "entries: $(bool_enabled_disabled "$refresh_entries") (${entry_count})"
-  echo "pbr: $(bool_enabled_disabled "$refresh_pbr") (${pbr_count})"
-  echo "auto apply: ${auto_apply}"
-  echo "auto sync forward pbr: ${auto_sync_forward_pbr}"
-  echo "auto sync domain pbr: ${auto_sync_domain_pbr}"
-  echo "entry auto restart relay: ${entry_auto_restart}"
-  echo "last run: ${last_time:-"-"}"
-  echo "last result: ${last_result:-"-"}"
-  echo "last scope: ${last_scope:-"-"}"
-  echo "forward changed: ${forward_changed:-"-"}"
-  echo "forward failed: ${forward_failed:-"-"}"
-  echo "entry changed: ${entry_changed:-"-"}"
-  echo "entry failed: ${entry_failed:-"-"}"
-  echo "pbr changed: ${pbr_changed:-"-"}"
-  echo "pbr failed: ${pbr_failed:-"-"}"
+  echo "自动检测: $(bool_enabled_disabled "$auto_enabled")"
+  echo "检测间隔: ${interval}"
+  echo "本机公网 IP: ${public_ip:-未检测}"
+  echo "公网 IP 检测源: ${public_ip_source:-"-"}"
+  echo "后端域名: checked ${forward_checked}, changed ${forward_changed_count}, failed ${forward_failed_count}"
+  echo "公网入口域名: checked ${entry_checked}, changed ${entry_changed_count}, failed ${entry_failed_count}"
+  echo "PBR 域名: checked ${pbr_checked}, changed ${pbr_changed_count}, failed ${pbr_failed_count}"
+  echo "nftables: ${nft_text}"
+  echo "PBR: ${pbr_text}"
   echo "relay restart needed: $(bool_yes_no "${relay_restart_needed:-false}")"
-  echo "nft applied: $(bool_yes_no "${nft_applied:-false}")"
-  echo "pbr applied: $(bool_yes_no "${pbr_applied:-false}")"
-  echo "relay restarted: $(bool_yes_no "${relay_restarted:-false}")"
-  echo
-  echo "公网入口 DDNS:"
-  echo "- 域名入口: ${entry_count}"
-  echo "- changed: ${entry_changed:-"-"}"
-  echo "- failed: ${entry_failed:-"-"}"
-  echo "- relay restart needed: $(bool_yes_no "${relay_restart_needed:-false}")"
-  echo "- auto restart relay: ${entry_auto_restart}"
-  if (( entry_count > 0 )) && [[ -z "$entry_changed$entry_failed" && "${relay_restart_needed:-false}" != "true" ]]; then
-    echo "公网入口 DDNS: OK"
+  [[ "${relay_restarted:-false}" == "true" ]] && echo "relay restarted: yes"
+  echo "最近检测: ${last_time:-"-"}"
+  echo "结果: $(status_result_display "${last_result:-unknown}")"
+  if [[ "${update_dns,,}" == "true" ]]; then
+    echo "[WARN] DDNS_UPDATE_DNS_RECORD=true，高级兼容 DNS 更新能力已显式启用。"
   fi
-  echo
-  echo "DDNS 检测摘要"
-  echo "----------------------------------------"
-  echo "后端转发："
-  echo "- 检查 ${forward_checked}"
-  echo "- 域名 ${forward_count}"
-  echo "- 变化 $(csv_count "$forward_changed")"
-  echo "- 失败 $(csv_count "$forward_failed")"
-  echo
-  echo "公网入口："
-  if (( entry_count == 0 )); then
-    echo "- 域名入口 0"
-    echo "- 无需刷新"
-  else
-    echo "- 检查 ${entry_checked}"
-    echo "- 域名入口 ${entry_count}"
-    echo "- 变化 $(csv_count "$entry_changed")"
-    echo "- 失败 $(csv_count "$entry_failed")"
-  fi
-  echo
-  echo "域名 PBR："
-  if (( pbr_count == 0 )); then
-    echo "- 未配置"
-  else
-    echo "- 检查 ${pbr_count}"
-    echo "- 变化 $(csv_count "$pbr_changed")"
-    echo "- 失败 $(csv_count "$pbr_failed")"
-  fi
-  echo
-  echo "系统动作："
-  echo "- nftables：$(ddns_action_text "${nft_applied:-false}" "已重应用" "待重应用" "无需重应用")"
-  echo "- PBR：$(ddns_action_text "${pbr_applied:-false}" "已应用" "待应用" "无需应用")"
-  if [[ "${relay_restarted:-false}" == "true" ]]; then
-    echo "- relay：已重启"
-  elif [[ "${relay_restart_needed:-false}" == "true" ]]; then
-    echo "- relay：pending"
-  else
-    echo "- relay：无需重启"
-  fi
-  echo
-  echo "结果："
-  echo "- DDNS 状态：$(status_result_display "${last_result:-unknown}")"
+  [[ -n "$last_scope" ]] && echo "详细分类: ${last_scope}"
 }
 
 ddns_apply_entries() {
@@ -5926,8 +6052,8 @@ ddns_apply_entries() {
   warn "公网入口 DDNS 已变化，EasyTier relay 可能仍使用旧解析。"
   info "重启 relay 会短暂影响所有入口。"
   if (( non_interactive == 1 )) || ! is_interactive; then
-    if ddns_config_bool DDNS_ENTRY_AUTO_RESTART_RELAY "$DDNS_ENTRY_AUTO_RESTART_RELAY_DEFAULT"; then
-      info "DDNS_ENTRY_AUTO_RESTART_RELAY=true，正在自动重启 relay。"
+    if ddns_config_bool DDNS_AUTO_RESTART_RELAY "$(ddns_config_value DDNS_ENTRY_AUTO_RESTART_RELAY "$DDNS_ENTRY_AUTO_RESTART_RELAY_DEFAULT")"; then
+      info "DDNS_AUTO_RESTART_RELAY=true，正在自动重启 relay。"
     else
       info "非交互模式不自动重启 relay。"
       info "可在维护窗口执行：lq ddns apply-entries"
@@ -5951,73 +6077,15 @@ ddns_apply_entries() {
 }
 
 ddns_overview() {
-  local b_timer b_forwards b_entries b_pbr b_last_result b_entry_changed b_restart_needed
-  local e_enabled e_host e_timer e_public e_resolved e_match e_last_result b_configured e_configured overall
-  b_configured="no"
-  [[ -f "$DDNS_CONFIG" || -f "$ENTRIES_TSV" || -f "$FORWARDS_TSV" || -f "$PBR_DOMAIN_TSV" ]] && b_configured="yes"
-  e_configured="no"
-  [[ -f "$ENTRY_DDNS_CONFIG" ]] && e_configured="yes"
-  b_timer="$(ddns_timer_state)"
-  b_forwards="$(ddns_domain_forward_count 2>/dev/null || printf '0')"
-  b_entries="$(ddns_domain_entry_count 2>/dev/null || printf '0')"
-  b_pbr="$(ddns_domain_pbr_count 2>/dev/null || printf '0')"
-  b_last_result="$(env_file_get "$DDNS_STATUS_FILE" LAST_DDNS_RESULT)"
-  b_entry_changed="$(env_file_get "$DDNS_STATUS_FILE" LAST_DDNS_ENTRY_CHANGED)"
-  b_restart_needed="$(env_file_get "$DDNS_STATUS_FILE" LAST_DDNS_RELAY_RESTART_NEEDED)"
-  e_enabled="$(entry_ddns_config_value ENTRY_DDNS_ENABLED "$ENTRY_DDNS_ENABLED_DEFAULT")"
-  e_host="$(entry_ddns_config_value ENTRY_DDNS_HOST "")"
-  e_timer="$(entry_ddns_timer_state)"
-  e_public="$(entry_ddns_status_value LAST_ENTRY_DDNS_PUBLIC_IP)"
-  e_resolved="$(entry_ddns_status_value LAST_ENTRY_DDNS_RESOLVED_IP)"
-  e_last_result="$(entry_ddns_status_value LAST_ENTRY_DDNS_RESULT)"
-  e_match="unknown"
-  if [[ -n "$e_public" && -n "$e_resolved" ]]; then
-    [[ "$e_public" == "$e_resolved" ]] && e_match="OK" || e_match="WARN"
-  elif [[ -z "$e_host" ]]; then
-    e_match="未配置"
-  fi
-  overall="OK"
-  if [[ "${b_restart_needed:-false}" == "true" || "$e_match" == "WARN" ]]; then
-    overall="WARN"
-  fi
-  case "${b_last_result,,}${e_last_result,,}" in
-    *fail*) overall="FAIL" ;;
-    *warn*) [[ "$overall" == "FAIL" ]] || overall="WARN" ;;
-  esac
-  echo "DDNS 总览"
-  echo "----------------------------------------"
-  if [[ "$b_configured" == "no" ]]; then
-    echo "B 端监控: 未配置"
-  else
-    echo "B 端监控:"
-    echo "- 后端转发: $(bool_enabled_disabled "$(ddns_config_value DDNS_REFRESH_FORWARDS "$DDNS_REFRESH_FORWARDS_DEFAULT")")，域名 ${b_forwards}，$(status_result_display "${b_last_result:-OK}")"
-    echo "- 公网入口: $(bool_enabled_disabled "$(ddns_config_value DDNS_REFRESH_ENTRIES "$DDNS_REFRESH_ENTRIES_DEFAULT")")，域名 ${b_entries}，relay restart needed: $(bool_yes_no "${b_restart_needed:-false}")"
-    echo "- 域名 PBR: $(bool_enabled_disabled "$(ddns_config_value DDNS_REFRESH_PBR "$DDNS_REFRESH_PBR_DEFAULT")")，域名 ${b_pbr}，$(status_result_display "${b_last_result:-OK}")"
-    [[ -n "$b_entry_changed" ]] && echo "- changed entries: ${b_entry_changed}"
-    echo "- timer: ${b_timer}"
-  fi
-  echo
-  if [[ "$e_configured" == "no" || -z "$e_host" ]]; then
-    echo "A 端更新: 未配置"
-  else
-    echo "A 端更新:"
-    echo "- 状态: $(bool_enabled_disabled "$e_enabled")"
-    echo "- 域名: ${e_host}"
-    echo "- 当前公网 IP: ${e_public:-"-"}"
-    echo "- 域名解析 IP: ${e_resolved:-"-"}"
-    echo "- 一致性: ${e_match}"
-    echo "- timer: ${e_timer}"
-  fi
-  echo
-  echo "整体状态: ${overall}"
+  ddns_status
 }
 
 ddns_check_consistency() {
   local result="OK" printed_b=0 name public_host _et_ip _proto _port _weight enabled resolved cached
   local host public_ip resolved_ip match
-  echo "DDNS 一致性检查"
+  echo "DDNS / IP 变化一致性检查"
   echo "----------------------------------------"
-  echo "B entries:"
+  echo "公网入口缓存:"
   while IFS=$'\t' read -r name public_host _et_ip _proto _port _weight enabled; do
     [[ "$enabled" == "true" ]] || continue
     is_domain_name "$public_host" || continue
@@ -6035,7 +6103,7 @@ ddns_check_consistency() {
     echo "未配置"
   fi
   echo
-  echo "A entry:"
+  echo "兼容 DNS 更新配置:"
   host="$(entry_ddns_config_value ENTRY_DDNS_HOST "")"
   if [[ -z "$host" ]]; then
     echo "未配置"
@@ -6069,7 +6137,7 @@ logs_index() {
   echo "日志查看 / 清理"
   echo "----------------------------------------"
   echo "DDNS 日志: ${DDNS_LOG_FILE}"
-  echo "A 端 DDNS 日志: ${ENTRY_DDNS_LOG_FILE}"
+  echo "兼容 DNS 更新日志: ${ENTRY_DDNS_LOG_FILE}"
   echo "apply-relay 日志: ${APPLY_RELAY_LOG}"
   echo "update 状态: ${UPDATE_STATUS_FILE}"
   echo "doctor 最近状态: ${STATUS_DIR}/last-doctor.env"
@@ -6119,7 +6187,7 @@ logs_menu() {
   while true; do
     print_menu_header "日志查看 / 清理"
     echo "1. 查看 DDNS 日志"
-    echo "2. 查看 A 端 DDNS 日志"
+    echo "2. 查看兼容 DNS 更新日志"
     echo "3. 查看 apply-relay 日志"
     echo "4. 查看 update 状态"
     echo "5. 查看 doctor 最近状态"
@@ -6158,7 +6226,7 @@ ddns_set_interval() {
   ddns_ensure_config
   local choice interval refresh_forwards refresh_entries refresh_pbr auto_apply auto_fix auto_sync_forward_pbr auto_sync_domain_pbr entry_auto_restart keep_old
   echo
-  echo "设置 DDNS 刷新间隔和范围："
+  echo "设置全局 IP 变化检测间隔："
   echo "1. 5min"
   echo "2. 10min"
   echo "3. 30min"
@@ -6182,16 +6250,9 @@ ddns_set_interval() {
   auto_sync_domain_pbr="$(ddns_config_value DDNS_AUTO_SYNC_DOMAIN_PBR "$DDNS_AUTO_SYNC_DOMAIN_PBR_DEFAULT")"
   entry_auto_restart="$(ddns_config_value DDNS_ENTRY_AUTO_RESTART_RELAY "$DDNS_ENTRY_AUTO_RESTART_RELAY_DEFAULT")"
   keep_old="$(ddns_config_value DDNS_KEEP_OLD_ON_FAIL "$DDNS_KEEP_OLD_ON_FAIL_DEFAULT")"
-  if prompt_yes_no "刷新后端转发目标域名？" "$(bool_to_default "$refresh_forwards")"; then refresh_forwards="true"; else refresh_forwards="false"; fi
-  if prompt_yes_no "刷新公网入口 public_host 域名？" "$(bool_to_default "$refresh_entries")"; then refresh_entries="true"; else refresh_entries="false"; fi
-  if prompt_yes_no "刷新域名 PBR？" "$(bool_to_default "$refresh_pbr")"; then refresh_pbr="true"; else refresh_pbr="false"; fi
-  if prompt_yes_no "域名后端变化后自动重应用 nftables / PBR？" "$(bool_to_default "$auto_apply")"; then auto_apply="true"; else auto_apply="false"; fi
-  if prompt_yes_no "转发目标 DDNS 变化后自动同步 forward 来源 PBR？" "$(bool_to_default "$auto_sync_forward_pbr")"; then auto_sync_forward_pbr="true"; else auto_sync_forward_pbr="false"; fi
-  if prompt_yes_no "自动同步域名 PBR？" "$(bool_to_default "$auto_sync_domain_pbr")"; then auto_sync_domain_pbr="true"; else auto_sync_domain_pbr="false"; fi
-  if prompt_yes_no "公网入口 DDNS 变化后自动重启 relay？" "$(bool_to_default "$entry_auto_restart")"; then entry_auto_restart="true"; else entry_auto_restart="false"; fi
   ddns_write_config "$interval" "$refresh_forwards" "$refresh_entries" "$refresh_pbr" "$auto_apply" "$auto_fix" "$auto_sync_forward_pbr" "$auto_sync_domain_pbr" "$entry_auto_restart" "$keep_old"
   ddns_install_units
-  ok "DDNS 刷新间隔已设置为：${interval}"
+  ok "全局 IP 变化检测间隔已设置为：${interval}"
   if command -v systemctl >/dev/null 2>&1 && systemctl is-enabled --quiet "${DDNS_SERVICE_NAME}.timer" 2>/dev/null; then
     systemctl restart "${DDNS_SERVICE_NAME}.timer" || warn "DDNS timer 重启失败，请稍后手动检查。"
   fi
@@ -6199,9 +6260,9 @@ ddns_set_interval() {
 
 ddns_toggle_menu() {
   local choice
-  print_menu_header "B 端 DDNS 自动刷新"
-  echo "1. 启用自动刷新"
-  echo "2. 禁用自动刷新"
+  print_menu_header "全局 IP 变化检测"
+  echo "1. 开启全局 IP 变化检测"
+  echo "2. 关闭全局 IP 变化检测"
   echo "0. 返回"
   choice="$(prompt_menu_choice "请选择：")"
   case "$choice" in
@@ -6214,9 +6275,9 @@ ddns_toggle_menu() {
 
 entry_ddns_toggle_menu() {
   local choice
-  print_menu_header "A 端 DDNS 自动刷新"
-  echo "1. 启用本机 DDNS timer"
-  echo "2. 禁用本机 DDNS timer"
+  print_menu_header "兼容 DNS 更新自动刷新"
+  echo "1. 启用兼容 DNS 更新 timer"
+  echo "2. 禁用兼容 DNS 更新 timer"
   echo "0. 返回"
   choice="$(prompt_menu_choice "请选择：")"
   case "$choice" in
@@ -6229,7 +6290,7 @@ entry_ddns_toggle_menu() {
 
 ddns_status_logs_menu() {
   local choice
-  print_menu_header "B 端 DDNS 状态 / 日志"
+  print_menu_header "DDNS / IP 变化状态 / 日志"
   echo "1. 查看状态"
   echo "2. 查看日志"
   echo "3. 查看总览"
@@ -6246,7 +6307,7 @@ ddns_status_logs_menu() {
 
 entry_ddns_status_logs_menu() {
   local choice
-  print_menu_header "A 端 DDNS 状态 / 日志"
+  print_menu_header "兼容 DNS 更新状态 / 日志"
   echo "1. 查看状态"
   echo "2. 查看日志"
   echo "0. 返回"
@@ -6259,19 +6320,138 @@ entry_ddns_status_logs_menu() {
   esac
 }
 
+ddns_set_public_ip_urls() {
+  need_root_unless_dry_run
+  ddns_ensure_config
+  local urls
+  echo "当前公网 IP 检测 URL 池："
+  echo "$(ddns_config_value PUBLIC_IP_CHECK_URLS "$PUBLIC_IP_CHECK_URLS_DEFAULT")"
+  urls="$(prompt_value "新的 URL 池（逗号分隔）" "$(ddns_config_value PUBLIC_IP_CHECK_URLS "$PUBLIC_IP_CHECK_URLS_DEFAULT")")"
+  [[ -n "$urls" ]] || urls="$PUBLIC_IP_CHECK_URLS_DEFAULT"
+  if (( DRY_RUN == 1 )); then
+    echo "[DRY-RUN] PUBLIC_IP_CHECK_URLS=${urls}"
+    return 0
+  fi
+  touch "$DDNS_CONFIG"
+  if grep -q '^PUBLIC_IP_CHECK_URLS=' "$DDNS_CONFIG" 2>/dev/null; then
+    sed -i "s#^PUBLIC_IP_CHECK_URLS=.*#PUBLIC_IP_CHECK_URLS=$(env_value_one_line "$urls")#" "$DDNS_CONFIG"
+  else
+    printf 'PUBLIC_IP_CHECK_URLS=%s\n' "$(env_value_one_line "$urls")" >>"$DDNS_CONFIG"
+  fi
+  ok "公网 IP 检测 URL 池已更新。"
+}
+
+ddns_toggle_auto_apply() {
+  need_root_unless_dry_run
+  ddns_ensure_config
+  local value
+  if prompt_yes_no "IP 变化后自动重应用 nftables？" "$(bool_to_default "$(ddns_config_value DDNS_AUTO_APPLY "$DDNS_AUTO_APPLY_DEFAULT")")"; then value="true"; else value="false"; fi
+  ddns_write_config "$(ddns_config_value DDNS_GLOBAL_INTERVAL "$(ddns_config_value DDNS_REFRESH_INTERVAL "$DDNS_GLOBAL_INTERVAL_DEFAULT")")" \
+    "$(ddns_config_value DDNS_REFRESH_FORWARDS "$DDNS_REFRESH_FORWARDS_DEFAULT")" \
+    "$(ddns_config_value DDNS_REFRESH_ENTRIES "$DDNS_REFRESH_ENTRIES_DEFAULT")" \
+    "$(ddns_config_value DDNS_REFRESH_PBR "$DDNS_REFRESH_PBR_DEFAULT")" \
+    "$value" \
+    "$(ddns_config_value DDNS_AUTO_FIX_ROUTE "$DDNS_AUTO_FIX_ROUTE_DEFAULT")" \
+    "$(ddns_config_value DDNS_AUTO_SYNC_FORWARD_PBR "$(ddns_config_value DDNS_AUTO_SYNC_PBR "$DDNS_AUTO_SYNC_FORWARD_PBR_DEFAULT")")" \
+    "$(ddns_config_value DDNS_AUTO_SYNC_DOMAIN_PBR "$DDNS_AUTO_SYNC_DOMAIN_PBR_DEFAULT")" \
+    "$(ddns_config_value DDNS_AUTO_RESTART_RELAY "$(ddns_config_value DDNS_ENTRY_AUTO_RESTART_RELAY "$DDNS_ENTRY_AUTO_RESTART_RELAY_DEFAULT")")" \
+    "$(ddns_config_value DDNS_KEEP_OLD_ON_FAIL "$DDNS_KEEP_OLD_ON_FAIL_DEFAULT")"
+  ok "DDNS_AUTO_APPLY=${value}"
+}
+
+ddns_toggle_auto_sync_pbr() {
+  need_root_unless_dry_run
+  ddns_ensure_config
+  local value
+  if prompt_yes_no "IP 变化后自动同步 PBR？" "$(bool_to_default "$(ddns_config_value DDNS_AUTO_SYNC_PBR "$DDNS_AUTO_SYNC_PBR_DEFAULT")")"; then value="true"; else value="false"; fi
+  ddns_write_config "$(ddns_config_value DDNS_GLOBAL_INTERVAL "$(ddns_config_value DDNS_REFRESH_INTERVAL "$DDNS_GLOBAL_INTERVAL_DEFAULT")")" \
+    "$(ddns_config_value DDNS_REFRESH_FORWARDS "$DDNS_REFRESH_FORWARDS_DEFAULT")" \
+    "$(ddns_config_value DDNS_REFRESH_ENTRIES "$DDNS_REFRESH_ENTRIES_DEFAULT")" \
+    "$(ddns_config_value DDNS_REFRESH_PBR "$DDNS_REFRESH_PBR_DEFAULT")" \
+    "$(ddns_config_value DDNS_AUTO_APPLY "$DDNS_AUTO_APPLY_DEFAULT")" \
+    "$(ddns_config_value DDNS_AUTO_FIX_ROUTE "$DDNS_AUTO_FIX_ROUTE_DEFAULT")" \
+    "$value" "$value" \
+    "$(ddns_config_value DDNS_AUTO_RESTART_RELAY "$(ddns_config_value DDNS_ENTRY_AUTO_RESTART_RELAY "$DDNS_ENTRY_AUTO_RESTART_RELAY_DEFAULT")")" \
+    "$(ddns_config_value DDNS_KEEP_OLD_ON_FAIL "$DDNS_KEEP_OLD_ON_FAIL_DEFAULT")"
+  if (( DRY_RUN == 0 )); then
+    sed -i "s/^DDNS_AUTO_SYNC_PBR=.*/DDNS_AUTO_SYNC_PBR=${value}/" "$DDNS_CONFIG" 2>/dev/null || true
+  fi
+  ok "DDNS_AUTO_SYNC_PBR=${value}"
+}
+
+ddns_toggle_auto_restart_relay() {
+  need_root_unless_dry_run
+  ddns_ensure_config
+  local value
+  if prompt_yes_no "允许 IP 变化后自动重启 relay？" "$(bool_to_default "$(ddns_config_value DDNS_AUTO_RESTART_RELAY "$DDNS_AUTO_RESTART_RELAY_DEFAULT")")"; then value="true"; else value="false"; fi
+  ddns_write_config "$(ddns_config_value DDNS_GLOBAL_INTERVAL "$(ddns_config_value DDNS_REFRESH_INTERVAL "$DDNS_GLOBAL_INTERVAL_DEFAULT")")" \
+    "$(ddns_config_value DDNS_REFRESH_FORWARDS "$DDNS_REFRESH_FORWARDS_DEFAULT")" \
+    "$(ddns_config_value DDNS_REFRESH_ENTRIES "$DDNS_REFRESH_ENTRIES_DEFAULT")" \
+    "$(ddns_config_value DDNS_REFRESH_PBR "$DDNS_REFRESH_PBR_DEFAULT")" \
+    "$(ddns_config_value DDNS_AUTO_APPLY "$DDNS_AUTO_APPLY_DEFAULT")" \
+    "$(ddns_config_value DDNS_AUTO_FIX_ROUTE "$DDNS_AUTO_FIX_ROUTE_DEFAULT")" \
+    "$(ddns_config_value DDNS_AUTO_SYNC_FORWARD_PBR "$(ddns_config_value DDNS_AUTO_SYNC_PBR "$DDNS_AUTO_SYNC_FORWARD_PBR_DEFAULT")")" \
+    "$(ddns_config_value DDNS_AUTO_SYNC_DOMAIN_PBR "$DDNS_AUTO_SYNC_DOMAIN_PBR_DEFAULT")" \
+    "$value" \
+    "$(ddns_config_value DDNS_KEEP_OLD_ON_FAIL "$DDNS_KEEP_OLD_ON_FAIL_DEFAULT")"
+  ok "DDNS_AUTO_RESTART_RELAY=${value}"
+}
+
+ddns_legacy_dns_update_menu() {
+  print_menu_header "兼容旧版 DNS 更新配置"
+  echo "该入口仅为旧脚本兼容。普通用户不需要配置 DNS provider token。"
+  echo "默认 DDNS_UPDATE_DNS_RECORD=false，Leikwan Toolkit 只检测解析变化并刷新本地配置。"
+  echo
+  local choice
+  echo "1. 查看旧版配置摘要"
+  echo "2. 打开旧版配置向导"
+  echo "0. 返回"
+  choice="$(prompt_menu_choice "请选择：")"
+  case "$choice" in
+    1|"") entry_ddns_current_config_summary ;;
+    2) entry_ddns_setup ;;
+    0) return 0 ;;
+    *) menu_invalid_choice ;;
+  esac
+}
+
+ddns_advanced_menu() {
+  local choice
+  while true; do
+    print_menu_header "DDNS 高级设置"
+    echo "1. 设置检测间隔"
+    echo "2. 设置公网 IP 检测 URL 池"
+    echo "3. 设置是否自动重应用 nftables"
+    echo "4. 设置是否自动同步 PBR"
+    echo "5. 设置 relay 是否允许自动重启"
+    echo "6. 兼容旧版 DNS 更新配置"
+    echo "0. 返回"
+    choice="$(prompt_menu_choice "请选择：")"
+    case "$choice" in
+      1) run_menu_action_pause ddns_set_interval ;;
+      2) run_menu_action_pause ddns_set_public_ip_urls ;;
+      3) run_menu_action_pause ddns_toggle_auto_apply ;;
+      4) run_menu_action_pause ddns_toggle_auto_sync_pbr ;;
+      5) run_menu_action_pause ddns_toggle_auto_restart_relay ;;
+      6) run_menu_action_pause ddns_legacy_dns_update_menu ;;
+      0) return 0 ;;
+      "") menu_input_required ;;
+      *) menu_invalid_choice ;;
+    esac
+  done
+}
+
 ddns_menu() {
   local choice
   while true; do
     print_ddns_menu_options
     choice="$(prompt_menu_choice "请选择：")"
     case "$choice" in
-      1) ensure_role_or_warn leikwan-relay && run_menu_action_pause ddns_refresh_once --scope all ;;
-      2) ensure_role_or_warn leikwan-relay && run_menu_action_pause ddns_apply_entries ;;
-      3) ensure_role_or_warn leikwan-relay && run_menu_action_pause ddns_status ;;
-      4) ensure_role_or_warn cloud-entry && run_menu_action_pause entry_ddns_setup ;;
-      5) ensure_role_or_warn cloud-entry && run_menu_action_pause entry_ddns_run ;;
-      6) ensure_role_or_warn cloud-entry && run_menu_action_pause entry_ddns_status ;;
-      7) run_menu_action_pause ddns_check_consistency ;;
+      1) ddns_toggle_menu ;;
+      2) run_menu_action_pause ddns_refresh_once --global ;;
+      3) run_menu_action_pause ddns_status ;;
+      4) run_menu_action_pause ddns_logs ;;
+      5) ddns_advanced_menu ;;
       0) return 0 ;;
       "") menu_input_required ;;
       *) menu_invalid_choice ;;
@@ -6281,17 +6461,11 @@ ddns_menu() {
 
 print_ddns_menu_options() {
   print_menu_header "DDNS"
-  echo "B 端监控："
-  echo "1. 检测全部域名变化"
-  echo "2. 应用公网入口 DDNS 变化"
-  echo "3. 查看 B 端 DDNS 状态"
-  echo
-  echo "A 端更新："
-  echo "4. 配置 A 端 DDNS"
-  echo "5. 立即更新 A 端 DDNS"
-  echo "6. 查看 A 端 DDNS 状态"
-  echo
-  echo "7. DDNS 一致性检查"
+  echo "1. 开启 / 关闭全局 IP 变化检测"
+  echo "2. 立即检测并刷新"
+  echo "3. 查看 DDNS / IP 变化状态"
+  echo "4. 查看 DDNS 日志"
+  echo "5. 高级设置"
   echo "0. 返回"
 }
 
@@ -7819,10 +7993,13 @@ config_export_time() {
 }
 
 config_sensitive_redact_tree() {
-  local root="$1" file
+  local root="$1" file size
   [[ -d "$root" ]] || return 0
   while IFS= read -r -d '' file; do
     [[ -f "$file" ]] || continue
+    size="$(wc -c <"$file" 2>/dev/null || printf '0')"
+    [[ "$size" =~ ^[0-9]+$ ]] || size=0
+    (( size <= 5 * 1024 * 1024 )) || continue
     LC_ALL=C grep -Iq . "$file" 2>/dev/null || continue
     sed -E -i \
       -e 's/(EASYTIER_NETWORK_SECRET=).*/\1REDACTED/g' \
@@ -7835,7 +8012,7 @@ config_sensitive_redact_tree() {
       -e 's/(ENTRY_DDNS_TOKEN=).*/\1REDACTED/g' \
       -e 's/(PrivateKey[[:space:]]*=[[:space:]]*)[^[:space:]]+/\1REDACTED/g' \
       "$file" 2>/dev/null || true
-  done < <(find "$root" -type f -size -5M -print0 2>/dev/null)
+  done < <(find "$root" -type f -print0 2>/dev/null)
 }
 
 config_package_mode_label() {
@@ -8858,7 +9035,7 @@ doctor_print_summary() {
   fi
   [[ "$nft" != "OK" || "$mss" != "OK" ]] && suggestions+=("执行 lq forward apply-relay --auto-fix-route")
   [[ "$overall" != "OK" ]] && suggestions+=("执行 lq doctor --auto-fix")
-  [[ "$ddns" != "OK" ]] && suggestions+=("执行 lq ddns run --scope all")
+  [[ "$ddns" != "OK" ]] && suggestions+=("执行 lq ddns run")
   if [[ "$(env_file_get "$DDNS_STATUS_FILE" LAST_DDNS_RELAY_RESTART_NEEDED)" == "true" ]]; then
     suggestions+=("执行 lq ddns apply-entries")
   fi
@@ -8930,7 +9107,7 @@ doctor_json() {
   fi
   [[ "$role_mixed" == "true" ]] && warnings+=("mixed role")
   [[ ! -d "$STATE_DIR" ]] && warnings+=("state dir missing")
-  [[ "${relay_restart_needed:-false}" == "true" ]] && warnings+=("relay restart needed after entry ddns change")
+  [[ "${relay_restart_needed:-false}" == "true" ]] && warnings+=("relay restart needed after public entry domain change")
   [[ "$nft_status" == WARN* ]] && warnings+=("nftables: ${nft_status}")
   [[ "$mss_status" == WARN* ]] && warnings+=("mss_clamp: ${mss_status}")
   case "${ddns_result,,}" in
@@ -8983,6 +9160,7 @@ doctor() {
     leikwan-relay) doctor_relay ;;
     *) report WARN "角色未知，请先执行 EasyTier 快速配对" ;;
   esac
+  report_ddns_global_state
   if (( VERBOSE_DOCTOR == 1 )); then
     report DEBUG "entries.tsv=${ENTRIES_TSV}"
     report DEBUG "forwards.tsv=${FORWARDS_TSV}"
@@ -9196,6 +9374,16 @@ status_ddns_forward_summary() {
   fi
 }
 
+ddns_lts_line() {
+  local timer_state result changed relay_needed
+  timer_state="$(ddns_timer_state)"
+  result="$(env_file_get "$DDNS_STATUS_FILE" LAST_DDNS_RESULT)"
+  [[ -n "$result" ]] || result="unknown"
+  changed=$(( $(csv_count "$(env_file_get "$DDNS_STATUS_FILE" LAST_DDNS_FORWARD_CHANGED)") + $(csv_count "$(env_file_get "$DDNS_STATUS_FILE" LAST_DDNS_ENTRY_CHANGED)") + $(csv_count "$(env_file_get "$DDNS_STATUS_FILE" LAST_DDNS_PBR_CHANGED)") ))
+  relay_needed="$(env_file_get "$DDNS_STATUS_FILE" LAST_DDNS_RELAY_RESTART_NEEDED)"
+  printf '%s, last %s, changed %s, relay restart needed: %s' "$(bool_enabled_disabled "$([[ "$timer_state" == "active" ]] && printf true || printf false)")" "$(status_result_display "$result")" "$changed" "$(bool_yes_no "${relay_needed:-false}")"
+}
+
 ddns_b_monitor_state_label() {
   local domain_count timer_state
   domain_count=$(( $(ddns_domain_forward_count 2>/dev/null || printf '0') + $(ddns_domain_entry_count 2>/dev/null || printf '0') + $(ddns_domain_pbr_count 2>/dev/null || printf '0') ))
@@ -9205,6 +9393,10 @@ ddns_b_monitor_state_label() {
   fi
   timer_state="$(ddns_timer_state)"
   [[ "$timer_state" == "active" ]] && printf 'active' || printf 'disabled'
+}
+
+ddns_global_state_label() {
+  ddns_b_monitor_state_label
 }
 
 ddns_entry_update_state_label() {
@@ -9229,9 +9421,8 @@ ddns_public_entry_change_label() {
 
 status_ddns_compact_block() {
   echo "DDNS:"
-  echo "- B 端监控: $(ddns_b_monitor_state_label)"
-  echo "- A 端更新: $(ddns_entry_update_state_label)"
-  echo "- 公网入口变化: $(ddns_public_entry_change_label)"
+  echo "- 全局 IP 变化检测: $(ddns_global_state_label)"
+  echo "- relay restart needed: $(bool_yes_no "$(env_file_get "$DDNS_STATUS_FILE" LAST_DDNS_RELAY_RESTART_NEEDED)")"
 }
 
 report_local_entry_ddns_status() {
@@ -9257,12 +9448,12 @@ report_local_entry_ddns_status() {
     return 0
   fi
   if [[ "$resolved" == "$public_ip" ]]; then
-    report OK "本机公网入口 DDNS 解析正常：${resolved}"
+    report OK "本机公网入口域名解析正常：${resolved}"
   else
     report WARN "本机公网入口域名解析与当前公网 IP 不一致。"
     report INFO "域名解析：${resolved}"
     report INFO "当前公网：${public_ip}"
-    report INFO "请检查 DDNS 客户端是否正常更新。"
+    report INFO "请检查外部 DDNS 客户端或 DNS 解析。"
   fi
 }
 
@@ -9300,7 +9491,6 @@ status_entry_ddns_updater_summary() {
   if [[ -z "$host" ]]; then
     printf '未配置'
   elif [[ "$enabled" != "true" ]]; then
-    status_mark_result warn
     printf 'WARN disabled'
   elif [[ -n "$public_ip" && -n "$resolved_ip" && "$public_ip" == "$resolved_ip" ]]; then
     printf 'OK %s' "$host"
@@ -9318,12 +9508,15 @@ report_entry_ddns_updater_status() {
   [[ -n "$host" ]] || return 0
   is_domain_name "$host" || return 0
   enabled="$(entry_ddns_config_value ENTRY_DDNS_ENABLED "$ENTRY_DDNS_ENABLED_DEFAULT")"
+  if ddns_config_bool DDNS_UPDATE_DNS_RECORD "$DDNS_UPDATE_DNS_RECORD_DEFAULT"; then
   if [[ "${enabled,,}" == "true" ]]; then
-    report OK "A 端 DDNS 更新器已启用：${host}"
+    report OK "兼容 DNS 记录更新已启用：${host}"
   else
-    report WARN "当前公网入口使用域名，但本机 DDNS 更新器未启用。"
-    report INFO "如果该域名由外部 DDNS 客户端维护，可忽略。"
-    report INFO "可执行：lq entry ddns setup"
+      report WARN "DDNS_UPDATE_DNS_RECORD=true，但兼容 DNS 更新入口未启用。"
+      report INFO "只有确实希望 Toolkit 修改 DNS 服务商记录时才需要配置 provider/token。"
+    fi
+  else
+    report INFO "DNS 服务商记录更新未启用；默认仅检测解析变化并刷新本地配置。"
   fi
 }
 
@@ -9333,11 +9526,44 @@ report_b_ddns_entry_monitor_status() {
   timer_state="$(ddns_timer_state)"
   restart_needed="$(env_file_get "$DDNS_STATUS_FILE" LAST_DDNS_RELAY_RESTART_NEEDED)"
   if (( entry_count > 0 )) && [[ "$timer_state" != "active" ]]; then
-    report INFO "检测到公网入口域名，建议启用 B 端 DDNS 监控：lq ddns enable"
+    report INFO "检测到公网入口域名，建议启用全局 IP 变化检测：lq ddns enable"
   fi
   if [[ "${restart_needed:-false}" == "true" ]]; then
-    report WARN "公网入口 DDNS 已变化，relay 可能需要重启。"
+    report WARN "公网入口域名解析已变化，relay 可能需要重启。"
     report INFO "可执行：lq ddns apply-entries"
+  fi
+}
+
+report_ddns_global_state() {
+  local public_ip public_source result forward_failed entry_failed pbr_failed restart_needed update_dns
+  public_ip="$(env_file_get "$DDNS_STATUS_FILE" LAST_DDNS_PUBLIC_IP)"
+  public_source="$(env_file_get "$DDNS_STATUS_FILE" LAST_DDNS_PUBLIC_IP_SOURCE)"
+  result="$(env_file_get "$DDNS_STATUS_FILE" LAST_DDNS_RESULT)"
+  forward_failed="$(env_file_get "$DDNS_STATUS_FILE" LAST_DDNS_FORWARD_FAILED)"
+  entry_failed="$(env_file_get "$DDNS_STATUS_FILE" LAST_DDNS_ENTRY_FAILED)"
+  pbr_failed="$(env_file_get "$DDNS_STATUS_FILE" LAST_DDNS_PBR_FAILED)"
+  restart_needed="$(env_file_get "$DDNS_STATUS_FILE" LAST_DDNS_RELAY_RESTART_NEEDED)"
+  update_dns="$(ddns_config_value DDNS_UPDATE_DNS_RECORD "$DDNS_UPDATE_DNS_RECORD_DEFAULT")"
+  if [[ -n "$public_ip" ]]; then
+    report OK "公网 IP 检测最近成功：${public_ip} (${public_source:-unknown})"
+  elif [[ -n "$result" ]]; then
+    report WARN "公网 IP 检测最近没有可用结果，请检查网络或自定义 PUBLIC_IP_CHECK_URLS。"
+  else
+    report INFO "尚无公网 IP 检测缓存，可执行：lq ddns run"
+  fi
+  if [[ -n "$forward_failed$entry_failed$pbr_failed" ]]; then
+    report WARN "存在域名解析失败，请检查 DNS。"
+    [[ -n "$forward_failed" ]] && report INFO "后端域名失败：${forward_failed}"
+    [[ -n "$entry_failed" ]] && report INFO "公网入口域名失败：${entry_failed}"
+    [[ -n "$pbr_failed" ]] && report INFO "PBR 域名失败：${pbr_failed}"
+  fi
+  if [[ "${restart_needed:-false}" == "true" ]]; then
+    report WARN "relay restart needed: yes，请在维护窗口重启 relay。"
+  fi
+  if [[ "${update_dns,,}" == "true" ]]; then
+    report WARN "DDNS_UPDATE_DNS_RECORD=true，只有显式需要 Toolkit 修改 DNS 记录时才应配置 provider/token。"
+  else
+    report INFO "DDNS_UPDATE_DNS_RECORD=false，默认不需要 DNS provider token。"
   fi
 }
 
@@ -9349,16 +9575,16 @@ report_entry_ddns_cache_status() {
     checked=$((checked + 1))
     cached_ip="$(last_resolved_ip_for_entry "$name")"
     if [[ -n "$cached_ip" ]]; then
-      report OK "公网入口 ${name} DDNS 缓存：${public_host} -> ${cached_ip}"
+      report OK "公网入口 ${name} 解析缓存：${public_host} -> ${cached_ip}"
     else
-      report WARN "公网入口 ${name} 缺少 DDNS 解析缓存，请执行：lq ddns run --scope entries"
+      report WARN "公网入口 ${name} 缺少解析缓存，请执行：lq ddns run"
     fi
   done < <(entries_rows)
   if (( checked == 0 )); then
     report INFO "未发现 enabled 域名公网入口。"
   fi
   if [[ "$(env_file_get "$DDNS_STATUS_FILE" LAST_DDNS_RELAY_RESTART_NEEDED)" == "true" ]]; then
-    report WARN "公网入口 DDNS 已变化，relay 可能需要重启。"
+    report WARN "公网入口域名解析已变化，relay 可能需要重启。"
     report INFO "可执行：lq ddns apply-entries"
   fi
 }
@@ -9518,27 +9744,29 @@ status_overview_relay() {
   echo "PBR 规则: ${pbr_count}"
   echo "nftables: $(status_nft_summary leikwan-relay "" "" "" "$forwards_enabled")"
   echo "MSS clamp: $(status_mss_summary)"
-  echo "DDNS 自动刷新: ${ddns_timer}"
-  echo "DDNS scopes: forwards=$(bool_yes_no "$ddns_refresh_forwards") entries=$(bool_yes_no "$ddns_refresh_entries") pbr=$(bool_yes_no "$ddns_refresh_pbr")"
+  echo "DDNS: $(ddns_lts_line)"
   if [[ -n "$ddns_last_time" ]]; then
-    echo "最近 DDNS: ${ddns_last_time} / $(status_result_display "$ddns_last_result")"
-    echo "后端 DDNS: $(status_ddns_forward_summary)"
-    echo "公网入口 DDNS: $(status_ddns_entry_summary)"
-    echo "PBR DDNS: $(status_ddns_pbr_summary)"
+    echo "最近检测: ${ddns_last_time} / $(status_result_display "$ddns_last_result")"
+    echo "公网 IP 检测源: $(env_file_get "$DDNS_STATUS_FILE" LAST_DDNS_PUBLIC_IP_SOURCE)"
+    echo "后端域名检测: $(status_ddns_forward_summary)"
+    echo "公网入口域名检测: $(status_ddns_entry_summary)"
+    echo "PBR 域名检测: $(status_ddns_pbr_summary)"
+    echo "nftables 应用状态: $(ddns_action_text "$(env_file_get "$DDNS_STATUS_FILE" LAST_DDNS_NFT_APPLIED)" "已重应用" "待重应用" "无需重应用")"
+    echo "PBR 同步状态: $(ddns_action_text "$(env_file_get "$DDNS_STATUS_FILE" LAST_DDNS_PBR_APPLIED)" "已同步" "待同步" "无需同步")"
   else
-    echo "最近 DDNS: -"
-    echo "后端 DDNS: -"
-    echo "公网入口 DDNS: -"
-    echo "PBR DDNS: -"
+    echo "最近检测: -"
+    echo "后端域名检测: -"
+    echo "公网入口域名检测: -"
+    echo "PBR 域名检测: -"
   fi
   status_ddns_compact_block
   if (( ddns_entry_count > 0 )) && [[ "$ddns_timer" != "active" ]]; then
-    echo "[INFO] 检测到公网入口域名，建议启用 B 端 DDNS 监控：lq ddns enable"
+    echo "[INFO] 检测到公网入口域名，建议启用全局 IP 变化检测：lq ddns enable"
   elif (( (ddns_forward_count + ddns_entry_count + ddns_pbr_count) > 0 )) && [[ "$ddns_timer" != "active" ]]; then
-    echo "[INFO] 检测到域名 DDNS 对象，可在 DDNS 菜单中启用自动刷新。"
+    echo "[INFO] 检测到域名对象，可在 DDNS 菜单中启用全局 IP 变化检测。"
   fi
   if [[ "$(env_file_get "$DDNS_STATUS_FILE" LAST_DDNS_RELAY_RESTART_NEEDED)" == "true" ]]; then
-    echo "[WARN] 公网入口 DDNS 已变化，relay 可能需要重启。"
+    echo "[WARN] 公网入口域名解析已变化，relay 可能需要重启。"
     echo "[INFO] 可执行：lq ddns apply-entries"
     status_mark_result warn
   fi
@@ -9573,12 +9801,11 @@ status_overview_entry() {
   echo "监听: $(easytier_protocols_display "$proto")/${port}"
   echo "公网入口端口池: ${start}-${end}"
   echo "本机公网入口 DDNS: $(status_local_entry_ddns_line)"
-  echo "A 端 DDNS 更新器: $(status_entry_ddns_updater_summary)"
+  echo "兼容 DNS 更新: $(status_entry_ddns_updater_summary)"
   status_ddns_compact_block
   if [[ -n "$public_host" ]] && is_domain_name "$public_host" && ! entry_ddns_config_bool ENTRY_DDNS_ENABLED "$ENTRY_DDNS_ENABLED_DEFAULT"; then
-    echo "[WARN] 当前公网入口使用域名，但本机 DDNS 更新器未启用。"
-    echo "[INFO] 如果该域名由外部 DDNS 客户端维护，可忽略。"
-    echo "[INFO] 可执行：lq entry ddns setup"
+    echo "[INFO] 当前公网入口使用域名；如果由路由器、服务商客户端或外部 DDNS 维护，可忽略兼容 DNS 更新。"
+    echo "[INFO] 建议使用：lq ddns run"
   fi
   echo "nftables: $(status_nft_summary cloud-entry "$relay_ip" "$start" "$end" 0)"
   echo "MSS clamp: $(status_mss_summary)"
@@ -9685,7 +9912,7 @@ status_lts() {
   echo "健康度: ${health}/100 $(health_level "$health")"
   echo "公网入口: ${entries_enabled} enabled"
   echo "转发目标: ${forwards_enabled} enabled"
-  echo "DDNS: $(status_result_display "$ddns_result")"
+  echo "DDNS: $(ddns_lts_line)"
   echo "nftables: $([[ "$nft_status" == OK* ]] && printf 'OK' || printf 'WARN')"
   echo "PBR: $([[ "$pbr_count" =~ ^[0-9]+$ ]] && printf 'OK' || printf 'WARN')"
   echo "整体状态: $(status_result_display "$overall")"
@@ -9730,7 +9957,7 @@ status_brief() {
   echo "Entries: ${entries_enabled} enabled"
   echo "Forwards: ${forwards_enabled} enabled"
   echo "PBR: ${pbr_count}"
-  echo "DDNS: $(status_result_display "$ddns_result")"
+  echo "DDNS: $(ddns_lts_line)"
   echo "nftables: $([[ "$nft_status" == OK* ]] && printf 'OK' || printf 'WARN')"
   echo "Health: ${health}/100 ($(health_level "$health"))"
   echo "Overall: $(status_result_display "$overall")"
@@ -9888,7 +10115,7 @@ status_json() {
   fi
   [[ "$role_mixed" == "true" ]] && warnings+=("mixed role")
   [[ ! -d "$STATE_DIR" ]] && warnings+=("state dir missing")
-  [[ "${relay_restart_needed:-false}" == "true" ]] && warnings+=("relay restart needed after entry ddns change")
+  [[ "${relay_restart_needed:-false}" == "true" ]] && warnings+=("relay restart needed after public entry domain change")
   [[ "$nft_status" == WARN* ]] && warnings+=("nftables: ${nft_status}")
   [[ "$mss_status" == WARN* ]] && warnings+=("mss_clamp: ${mss_status}")
   case "${ddns_result,,}" in
@@ -10562,7 +10789,7 @@ uninstall_deep() {
   uninstall_print_check_result
   uninstall_check_line "配置目录" dir "$STATE_DIR"
   uninstall_check_line "DDNS 日志文件" file "$DDNS_LOG_FILE"
-  uninstall_check_line "A 端 DDNS 日志文件" file "$ENTRY_DDNS_LOG_FILE"
+  uninstall_check_line "兼容 DNS 更新日志文件" file "$ENTRY_DDNS_LOG_FILE"
   uninstall_check_line "apply-relay 日志" file "$APPLY_RELAY_LOG"
   ok "深度卸载完成。"
 }
@@ -11395,12 +11622,12 @@ endpoint_output_menu() {
 entry_ddns_menu() {
   local choice
   while true; do
-    print_menu_header "A 端 DDNS"
-    echo "1. 配置 A 端 DDNS"
-    echo "2. 立即更新 A 端 DDNS"
-    echo "3. 启用 / 禁用 A 端 DDNS"
-    echo "4. 查看 A 端 DDNS 状态"
-    echo "5. 查看 A 端 DDNS 日志"
+    print_menu_header "兼容 DNS 更新"
+    echo "1. 配置兼容 DNS 更新"
+    echo "2. 立即执行兼容 DNS 更新"
+    echo "3. 启用 / 禁用兼容 DNS 更新"
+    echo "4. 查看兼容 DNS 更新状态"
+    echo "5. 查看兼容 DNS 更新日志"
     echo "0. 返回"
     choice="$(prompt_menu_choice "请选择：")"
     case "$choice" in
@@ -11479,14 +11706,14 @@ entry_host_menu() {
     echo "1. 粘贴接入码并部署入口"
     echo "2. 配置入口端口池"
     echo "3. 查看 A 端状态"
-    echo "4. A 端 DDNS"
+    echo "4. DDNS / IP 变化检测"
     echo "0. 返回"
     choice="$(prompt_menu_choice "请选择：")"
     case "$choice" in
       1) run_menu_action quick_deploy_entry_from_network_pairing ;;
       2) run_menu_action_pause entry_expose_range ;;
       3) run_menu_action_pause status_lts ;;
-      4) entry_ddns_menu ;;
+      4) ddns_menu ;;
       0) return 0 ;;
       "") menu_input_required ;;
       *) menu_invalid_choice ;;
@@ -11662,10 +11889,10 @@ main() {
         ddns)
           case "${3:-}" in
             status) run_cli_action entry_ddns_status ;;
-            setup) run_cli_action entry_ddns_setup ;;
-            run) shift 3; entry_ddns_run "$@" ;;
-            enable) entry_ddns_enable_timer ;;
-            disable) entry_ddns_disable_timer ;;
+            setup) warn "该命令为兼容入口，普通用户建议使用 lq ddns run。"; run_cli_action entry_ddns_setup ;;
+            run) warn "该命令为兼容入口，普通用户建议使用 lq ddns run。"; shift 3; entry_ddns_run "$@" ;;
+            enable) warn "该命令为兼容入口，普通用户建议使用 lq ddns enable。"; entry_ddns_enable_timer ;;
+            disable) warn "该命令为兼容入口，普通用户建议使用 lq ddns disable。"; entry_ddns_disable_timer ;;
             logs) entry_ddns_logs ;;
             *) fail "未知 entry ddns 子命令：${3:-}"; print_help; exit 1 ;;
           esac
@@ -11706,10 +11933,10 @@ main() {
         entry)
           case "${3:-}" in
             status) run_cli_action entry_ddns_status ;;
-            run) shift 3; entry_ddns_run "$@" ;;
-            setup) run_cli_action entry_ddns_setup ;;
-            enable) entry_ddns_enable_timer ;;
-            disable) entry_ddns_disable_timer ;;
+            run) warn "该命令为兼容入口，普通用户建议使用 lq ddns run。"; shift 3; entry_ddns_run "$@" ;;
+            setup) warn "该命令为兼容入口，普通用户建议使用 lq ddns run。"; run_cli_action entry_ddns_setup ;;
+            enable) warn "该命令为兼容入口，普通用户建议使用 lq ddns enable。"; entry_ddns_enable_timer ;;
+            disable) warn "该命令为兼容入口，普通用户建议使用 lq ddns disable。"; entry_ddns_disable_timer ;;
             logs) entry_ddns_logs ;;
             *) fail "未知 ddns entry 子命令：${3:-}"; print_help; exit 1 ;;
           esac

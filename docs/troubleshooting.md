@@ -1,6 +1,6 @@
 ﻿# 故障排查
 
-Leikwan Toolkit 1.4.0 主线是 EasyTier 传输 + nftables 四层 TCP/UDP 转发。脚本不部署后端业务，只负责：
+Leikwan Toolkit 1.4.1 主线是 EasyTier 传输 + nftables 四层 TCP/UDP 转发。脚本不部署后端业务，只负责：
 
 ```text
 外部客户端 -> A 公网入口端口（TCP/UDP） -> EasyTier -> B 利群主机 -> 后端目标
@@ -123,25 +123,20 @@ lq logs doctor
 
 无日志时会友好提示。清理运行日志使用 `lq logs clean`，它不会删除配置、快照或备份。
 
-## A/B DDNS 不一致
+## DDNS / IP 变化不一致
 
-A 公网入口端负责把本机公网 IP 更新到 DNS 服务商；B 利群主机只负责检测域名解析变化并同步本机规则。B 端不能替 A 端更新 DNS 记录。
+Leikwan Toolkit 默认不修改 DNS 记录。域名解析应由路由器、服务商客户端、Cloudflare 或外部脚本维护；Toolkit 只检测解析变化并同步本机规则。
 
-先看总览：
+先看状态：
 
 ```bash
-lq ddns overview
+lq ddns status
 lq ddns check-consistency
 ```
 
-如果 A 端公网 IP 和域名解析不一致，先在 A 上执行：
+如果本机公网 IP 检测失败，检查网络或自定义 `PUBLIC_IP_CHECK_URLS`。如果域名解析失败，检查 DNS 或外部 DDNS 客户端。
 
-```bash
-lq entry ddns status
-lq entry ddns run
-```
-
-如果 B 端显示 `relay restart needed`，说明公网入口域名已经变化，relay 可能需要重启才能重新解析 peer。维护窗口内执行：
+如果显示 `relay restart needed`，说明公网入口域名已经变化，relay 可能需要重启才能重新解析 peer。维护窗口内执行：
 
 ```bash
 lq ddns apply-entries
@@ -285,16 +280,11 @@ lq ddns overview
 lq ddns apply-entries
 lq ddns enable
 lq ddns logs
-lq entry ddns status
-lq entry ddns setup
-lq entry ddns run
 ```
 
 如果 `lq ddns run --scope forwards` 显示 IP 未变化，不会重应用 nftables。如果显示解析变化，会更新 `resolved.tsv` 并安全重应用转发规则。解析失败时会保留旧 IP。
 
-公网入口 DDNS 分两端：A 端负责把自己的当前公网 IP 更新到 DNS 服务商，B 端只负责解析和监控 `entries.tsv public_host`。如果 A 端没有 `entry ddns` 或外部 DDNS 客户端，B 端看到的仍会是旧 IP。
-
-公网入口 DDNS 变化时，默认不会自动重启 relay。状态中会显示 `relay restart needed`，因为 EasyTier 运行中不一定重新解析 peer 域名。建议执行 `lq ddns apply-entries` 并在维护窗口确认重启；只有设置 `DDNS_ENTRY_AUTO_RESTART_RELAY=true` 后，timer 才会自动重启。
+公网入口域名解析由外部 DDNS 维护。Toolkit 检测到变化时，默认不会自动重启 relay。状态中会显示 `relay restart needed`，因为 EasyTier 运行中不一定重新解析 peer 域名。建议执行 `lq ddns apply-entries` 并在维护窗口确认重启；只有设置 `DDNS_AUTO_RESTART_RELAY=true` 后，timer 才会自动重启。
 
 forward 来源 PBR 可执行：
 

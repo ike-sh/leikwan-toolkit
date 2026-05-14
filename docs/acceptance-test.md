@@ -216,10 +216,10 @@ lq --ddns-run
 - forward IP 未变化时不重应用 nftables。
 - forward IP 变化时更新 `resolved.tsv`，创建 `auto-before-ddns-apply-*.tar.gz` 快照并安全重应用 nftables。
 - entry IP 变化时更新 `resolved-entries.tsv`，默认只记录 `relay restart needed`，timer 不自动重启 relay。
-- A 端 `entry ddns` 可用 custom-url / custom-cmd 更新本机公网入口域名；若域名由外部 DDNS 客户端维护，可保持 disabled。
+- 默认不修改 DNS 服务商记录；兼容 `entry ddns` 仅在 `DDNS_UPDATE_DNS_RECORD=true` 时用于高级旧脚本集成。
 - `lq ddns apply-entries` 在没有 pending 变化时输出 OK；有 pending 变化时提示 relay 重启风险，确认后创建快照、重启 relay 并测试 enabled entries。
-- `lq ddns overview` 在只有 A 或只有 B 配置时也不崩溃，未配置侧显示“未配置”。
-- `lq ddns check-consistency` 只读检查 B entries 缓存和 A entry DDNS 一致性。
+- `lq ddns overview` 输出统一 DDNS / IP 变化检测状态。
+- `lq ddns check-consistency` 只读检查公网入口缓存和兼容 DNS 更新摘要。
 - pbr domain IP 变化时更新 `resolved-pbr-domains.tsv`，生成新的 `pbr-domain:<name>` `/32` 规则。
 - 解析失败时保留旧 resolved IP。
 

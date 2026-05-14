@@ -4,7 +4,8 @@ set -Eeuo pipefail
 ROOT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
-TMP_DIR="$(mktemp -d)"
+mkdir -p "$ROOT_DIR/.tmp"
+TMP_DIR="$(TMPDIR="$ROOT_DIR/.tmp" mktemp -d)"
 trap 'rm -rf "$TMP_DIR"' EXIT
 
 export LEIKWAN_STATE_DIR="${TMP_DIR}/state"
@@ -23,11 +24,17 @@ grep -q "6. 高级维护" <<<"$main_out"
 grep -q "0. 退出" <<<"$main_out"
 
 ddns_out="$(print_ddns_menu_options)"
-grep -q "B 端监控：" <<<"$ddns_out"
-grep -q "2. 应用公网入口 DDNS 变化" <<<"$ddns_out"
-grep -q "A 端更新：" <<<"$ddns_out"
-grep -q "4. 配置 A 端 DDNS" <<<"$ddns_out"
-grep -q "7. DDNS 一致性检查" <<<"$ddns_out"
+grep -q "1. 开启 / 关闭全局 IP 变化检测" <<<"$ddns_out"
+grep -q "2. 立即检测并刷新" <<<"$ddns_out"
+grep -q "3. 查看 DDNS / IP 变化状态" <<<"$ddns_out"
+grep -q "4. 查看 DDNS 日志" <<<"$ddns_out"
+grep -q "5. 高级设置" <<<"$ddns_out"
 grep -q "0. 返回" <<<"$ddns_out"
+forbidden_regex="$(printf '%s|%s|%s|%s' "A 端""更新" "B 端""监控" "配置 A 端"" DDNS" "应用公网入口 DDNS ""变化")"
+if grep -Eq "$forbidden_regex" <<<"$ddns_out"; then
+  echo "FAIL: old DDNS menu wording leaked" >&2
+  echo "$ddns_out" >&2
+  exit 1
+fi
 
 echo "[OK] ddns menu regression passed"

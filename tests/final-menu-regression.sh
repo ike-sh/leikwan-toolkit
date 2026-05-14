@@ -4,7 +4,8 @@ set -Eeuo pipefail
 ROOT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
-TMP_DIR="$(mktemp -d)"
+mkdir -p "$ROOT_DIR/.tmp"
+TMP_DIR="$(TMPDIR="$ROOT_DIR/.tmp" mktemp -d)"
 trap 'rm -rf "$TMP_DIR"' EXIT
 
 export LEIKWAN_STATE_DIR="${TMP_DIR}/state"
@@ -18,7 +19,7 @@ mkdir -p "$LEIKWAN_RUN_DIR"
 source "$ROOT_DIR/leikwan-toolkit.sh"
 
 main_out="$(print_main_menu_options)"
-grep -q "Leikwan Toolkit 1.4.0 LTS" <<<"$main_out"
+grep -q "Leikwan Toolkit 1.4.1 LTS" <<<"$main_out"
 grep -q "1. 快速组网" <<<"$main_out"
 grep -q "2. 利群主机 B" <<<"$main_out"
 grep -q "3. 公网入口 A" <<<"$main_out"
@@ -33,12 +34,18 @@ if grep -Eq '7\.|8\.|9\.' <<<"$main_out"; then
 fi
 
 ddns_out="$(print_ddns_menu_options)"
-grep -q "B 端监控：" <<<"$ddns_out"
-grep -q "A 端更新：" <<<"$ddns_out"
-grep -q "1. 检测全部域名变化" <<<"$ddns_out"
-grep -q "2. 应用公网入口 DDNS 变化" <<<"$ddns_out"
-grep -q "7. DDNS 一致性检查" <<<"$ddns_out"
+grep -q "1. 开启 / 关闭全局 IP 变化检测" <<<"$ddns_out"
+grep -q "2. 立即检测并刷新" <<<"$ddns_out"
+grep -q "3. 查看 DDNS / IP 变化状态" <<<"$ddns_out"
+grep -q "4. 查看 DDNS 日志" <<<"$ddns_out"
+grep -q "5. 高级设置" <<<"$ddns_out"
 grep -q "0. 返回" <<<"$ddns_out"
+forbidden_regex="$(printf '%s|%s|%s|%s' "A 端""更新" "B 端""监控" "配置 A 端"" DDNS" "应用公网入口 DDNS ""变化")"
+if grep -Eq "$forbidden_regex" <<<"$ddns_out"; then
+  echo "FAIL: old DDNS menu wording leaked" >&2
+  echo "$ddns_out" >&2
+  exit 1
+fi
 
 advanced_out="$(print_advanced_menu_options)"
 grep -q "高级维护" <<<"$advanced_out"

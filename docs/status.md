@@ -1,6 +1,6 @@
 # 状态输出
 
-Leikwan Toolkit 1.4.0 对 `lq status` 做了稳定化整理，目标是让日常巡检像正式运维系统一样可读、可脚本化、不会误报角色。
+Leikwan Toolkit 1.4.1 对 `lq status` 做了稳定化整理，目标是让日常巡检像正式运维系统一样可读、可脚本化、不会误报角色。
 
 ## 常用命令
 
@@ -16,12 +16,12 @@ lq --status-json
 LEIKWAN_BRIEF=1 lq status
 ```
 
-1.4.0 LTS 起，`lq status` 默认输出最终版短状态：
+1.4.1 LTS 起，`lq status` 默认输出最终版短状态：
 
 ```text
 Leikwan 状态
 ----------------------------------------
-版本: 1.4.0 LTS
+版本: 1.4.1 LTS
 角色: relay
 健康度: 96/100 excellent
 公网入口: 2 enabled
@@ -84,17 +84,19 @@ JSON 输出不受简洁模式影响，仍输出结构化摘要。
 
 评分会参考 EasyTier、relay / entry 服务、entries、forwards、PBR、nftables、MSS clamp、DDNS、锁和最近错误。它是巡检提示，不替代 `lq --doctor` 的详细诊断。
 
-## DDNS 总览
+## DDNS / IP 变化状态
 
-1.4.0 起，`lq status` 会区分两类 DDNS：
+1.4.1 起，`lq status` 将 DDNS 显示为全局 IP 变化检测：
 
-- B 端监控：后端转发目标、公网入口域名、域名 PBR。
-- A 端更新器：本机公网入口域名是否启用更新、最近公网 IP / 解析 IP 是否一致。
+- 检测本机公网 IP。
+- 检测后端域名、公网入口域名和 PBR 域名。
+- 发现变化后刷新 resolved 缓存、nftables 和 PBR。
+- 默认不修改 DNS 服务商记录，不要求 DNS provider token。
 
-如果 B 端检测到公网入口域名变化但 relay 尚未重启，状态会提示：
+如果检测到公网入口域名变化但 relay 尚未重启，状态会提示：
 
 ```text
-[WARN] 公网入口 DDNS 已变化，relay 可能需要重启。
+[WARN] 公网入口域名解析已变化，relay 可能需要重启。
 [INFO] 可执行：lq ddns apply-entries
 ```
 
@@ -102,9 +104,8 @@ JSON 输出不受简洁模式影响，仍输出结构化摘要。
 
 ```text
 DDNS:
-- B 端监控: active / disabled / not configured
-- A 端更新: active / disabled / not configured
-- 公网入口变化: none / relay restart needed
+- 全局 IP 变化检测: active / disabled / not configured
+- relay restart needed: yes / no
 ```
 
 JSON 输出包含 `entry_ddns_enabled`、`entry_ddns_host`、`entry_ddns_public_ip`、`entry_ddns_resolved_ip`、`entry_ddns_match`、`relay_restart_needed`，不包含 token、secret 或自定义更新 URL。

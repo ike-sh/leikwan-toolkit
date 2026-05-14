@@ -35,7 +35,7 @@ DDNS_RELAY_RESTART_NEEDED=false
 DDNS_RELAY_RESTARTED=false
 
 summary="$(ddns_print_summary ok)"
-grep -q "DDNS 检测摘要" <<<"$summary"
+grep -q "全局 IP 变化检测摘要" <<<"$summary"
 grep -q "后端转发：" <<<"$summary"
 grep -q -- "- 检查 4" <<<"$summary"
 grep -q "公网入口：" <<<"$summary"

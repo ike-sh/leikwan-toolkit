@@ -1,174 +1,87 @@
 # Leikwan Toolkit
 
-Leikwan Toolkit Shell Core is frozen at `1.4.0 LTS`.
+Leikwan Toolkit Shell Core is `1.4.1 LTS`. This repository now keeps only the Shell LTS line: `leikwan-toolkit.sh`, `scripts/bootstrap.sh`, docs, and tests.
 
-Leikwan Toolkit is a TCP/UDP forwarding toolkit for an **A public entry + B relay host + C backend target** topology. The Shell Core remains responsible for real forwarding behavior: EasyTier, nftables, DDNS, PBR, snapshots and local maintenance.
+Leikwan Toolkit is a TCP/UDP forwarding toolkit for a public entry, relay host, and backend target topology. The Shell Core owns the real local behavior: EasyTier, nftables forwarding, global IP change detection, PBR, snapshots, status, doctor, and maintenance.
 
-## Core Quick Start
+## Quick Start
 
 ```bash
 curl -fsSL -o /tmp/lq-bootstrap.sh https://raw.githubusercontent.com/ike-sh/leikwan-toolkit/main/scripts/bootstrap.sh && bash /tmp/lq-bootstrap.sh
 lq init
 ```
 
-Common Core commands:
+Common commands:
 
 ```bash
 lq init
 lq status
+lq status --verbose
 lq --doctor
-lq ddns overview
+lq ddns run
+lq ddns status
 lq forward apply-relay --auto-fix-route
 lq update check
 ```
 
-## Leikwan Panel 2.1.0 Stable
+## Shell LTS Scope
 
-Leikwan Panel `2.1.0` is the stable safety-control plane. It provides Controller / Agent / Web UI for observation, readonly diagnostics, manual planning and audit metadata.
+The former `panel/` code has moved to the separate `edge-tunnel-panel` repository and is not part of this Shell LTS line. This repo does not restore panel implementation files.
 
-It supports Controller / Agent, node heartbeat, readonly status reports, readonly Tasks, Plan manual execution, Plan dry-run, Snapshot / Rollback metadata, Safety Gate, Action Catalog, Write Action Review, Operator Auth and strict-auth.
+## 全局 IP 变化检测与自动刷新
 
-It does **not** execute write operations, create write tasks, accept command strings, add/delete/modify forwards, switch public entries, restart relay, create snapshots, run rollback, or modify nftables, systemd, EasyTier, DDNS, entries, forwards or PBR.
+Leikwan Toolkit 默认不修改 DNS 服务商记录。你的 DDNS 解析记录可以由路由器、服务商客户端、Cloudflare、Cloudflare Worker、外部 DDNS 客户端或外部脚本维护。
 
-## Leikwan Panel 3.0.0-alpha.2
+Toolkit 只负责检测 IP 和域名解析是否变化：
 
-`3.0.0-alpha.2` is the first **real apply alpha**. It can install/configure EasyTier, write Panel nftables/PBR/DDNS config, reload Panel firewall rules and queue fixed node actions when an operator explicitly enables `enable_write_actions=true` on that Agent.
+- 检测本机公网 IP。
+- 检测 `entries.tsv` 中 enabled `public_host` 域名。
+- 检测 `forwards.tsv` 中 enabled `target_host` 域名。
+- 检测 PBR 域名规则。
+- 发现变化后自动刷新本地转发、`resolved.tsv` 缓存和 PBR。
 
-The demo flow is intentionally small:
-
-1. Install Controller.
-2. Open Web Panel.
-3. Unlock with Operator token.
-4. Add Agent nodes from the Bootstrap page.
-5. Create a Network profile.
-6. Create an Entry.
-7. Create a Forward.
-8. Apply.
-9. Watch Tasks.
-
-Controller one-click install:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/ike-sh/leikwan-toolkit/main/panel/scripts/install-controller.sh | sudo bash
-```
-
-If the GitHub Release asset has not been uploaded yet, the installer automatically falls back to building from the GitHub source tarball.
-
-Agent one-click join:
-
-Open Web Panel -> Add Agent, choose the node role and copy the generated command. A full command looks like:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/ike-sh/leikwan-toolkit/main/panel/scripts/install-agent.sh | sudo bash -s -- \
-  --controller-url http://PANEL_HOST:18080 \
-  --token AGENT_TOKEN \
-  --node-name relay-1 \
-  --role relay \
-  --enable-tasks \
-  --enable-write-actions
-```
-
-Alpha write actions are fixed allowlisted actions only:
-
-- `configure_node_role`
-- `apply_network_profile`
-- `apply_entry_config`
-- `apply_forward_config`
-- `reload_leikwan_core`
-- `verify_applied_config`
-- `install_easytier`
-- `configure_easytier_network`
-- `start_easytier`
-- `restart_easytier`
-- `stop_easytier`
-- `apply_entry_ports`
-- `apply_forward_rules`
-- `apply_pbr_rules`
-- `apply_ddns_config`
-- `ddns_sync_now`
-- `reload_firewall_rules`
-- `restart_agent`
-- `reboot_node`
-
-They do not accept command strings, do not run `shell -c`, do not run `bash -c`, do not run `eval`, and do not expose raw nft / iptables / ip route operations. Panel writes only under its own managed paths such as `/etc/leikwan-agent/`, `/etc/systemd/system/leikwan-easytier.service`, `/var/backups/leikwan-panel-agent/` and uses fixed argv for `systemctl`, `nft`, `ip` and `reboot`. The landing/backend machine does **not** need an Agent; it is configured as `target_host:target_port`.
-
-Still disabled or blocked:
-
-- `create_entry`
-- `create_forward`
-- `switch_entry`
-- `rollback_config`
-- `restart_relay`
-- arbitrary commands
-- raw shell
-- raw nft / iptables / ip route
-
-## Deployment Model
-
-- Controller can run on a dedicated management host.
-- Agents run on A public entry and B relay nodes.
-- C backend/landing machines do not need Agents.
-- Agents connect outward to Controller.
-- Controller outage does not affect existing Core forwarding.
-- `LEIKWAN_CONTROLLER_TOKEN` is for Agents.
-- `LEIKWAN_OPERATOR_TOKEN` is for Web / Operator APIs.
-- Agent token and Operator token are intentionally not interchangeable.
-
-## Panel Local Development
-
-Controller:
-
-```bash
-cd panel/controller
-go test ./...
-go run ./cmd/leikwan-controller --listen 127.0.0.1:18080 --db ./data/controller.db
-```
-
-Agent:
-
-```bash
-cd panel/agent
-go test ./...
-go run ./cmd/leikwan-agent --config ./agent.yml --once
-```
-
-Web:
-
-```bash
-cd panel/controller
-npm --prefix web install
-npm --prefix web run build
-```
-
-Panel release package:
-
-```bash
-bash panel/scripts/build-release.sh
-```
-
-Output:
+内置公网 IP 检测 URL 池，国内外服务器都可以直接使用：
 
 ```text
-panel/dist/leikwan-controller
-panel/dist/leikwan-agent
-panel/dist/web/
-panel/dist/docs/
-panel/dist/examples/
-panel/dist/scripts/
-panel/dist/SHA256SUMS
+https://api.ipify.org
+https://ifconfig.me/ip
+https://ipv4.icanhazip.com
+https://4.ipw.cn
+https://ip.3322.net
+https://myip.ipip.net
 ```
+
+默认不会自动重启 relay，避免中断业务。公网入口域名解析变化时只标记 `relay restart needed`；需要自动重启时再显式设置：
+
+```text
+DDNS_AUTO_RESTART_RELAY=true
+```
+
+默认配置位于：
+
+```text
+/etc/leikwan-toolkit/ddns-global.env
+```
+
+关键默认值：
+
+```text
+DDNS_UPDATE_DNS_RECORD=false
+DDNS_AUTO_APPLY=true
+DDNS_AUTO_SYNC_PBR=true
+DDNS_AUTO_RESTART_RELAY=false
+PUBLIC_IP_CHECK_URLS=
+```
+
+兼容旧版 DNS 更新能力仍保留给高级用户，但普通路径不需要 DNS provider token。
 
 ## Docs
 
-- [Panel 2.1.0 Release Notes](panel/docs/release-2.1.0.md)
-- [Panel 3.0 Alpha Notes](panel/docs/release-3.0-alpha.md)
-- [Quick Start](panel/docs/quickstart.md)
-- [One-click Install](panel/docs/one-click-install.md)
-- [Agent Join](panel/docs/agent-join.md)
-- [Network / Forwarding](panel/docs/network-forwarding.md)
-- [PBR](panel/docs/pbr.md)
-- [DDNS](panel/docs/ddns.md)
-- [Security](panel/docs/security.md)
-- [Operator Auth](panel/docs/operator-auth.md)
-- [Action Catalog](panel/docs/action-catalog.md)
-- [Safety Model](panel/docs/safety-model.md)
+- [DDNS / IP 变化检测](docs/ddns-refresh.md)
+- [CLI](docs/cli.md)
+- [状态输出](docs/status.md)
+- [Doctor](docs/doctor.md)
+- [PBR](docs/pbr.md)
+- [nftables 转发](docs/nftables-forwarding.md)
+- [Workflow](docs/workflow.md)
+- [Testing](docs/testing.md)
