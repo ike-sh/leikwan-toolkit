@@ -7,14 +7,25 @@ Leikwan Toolkit is a TCP/UDP forwarding toolkit for a public entry, relay host, 
 ## Quick Start
 
 ```bash
-curl -fsSL -o /tmp/lq-bootstrap.sh https://raw.githubusercontent.com/ike-sh/leikwan-toolkit/main/scripts/bootstrap.sh && bash /tmp/lq-bootstrap.sh
-lq init
+curl -fsSL -o /tmp/lq-bootstrap.sh https://raw.githubusercontent.com/ike-sh/leikwan-toolkit/main/scripts/bootstrap.sh
+bash /tmp/lq-bootstrap.sh
+lq
 ```
 
 Common commands:
 
 ```bash
-lq init
+export LEIKWAN_GITHUB_MIRRORS="https://gh.llkk.cc/,https://gh.ddlc.top/,https://gh-proxy.com/,https://ghproxy.net/"
+curl -fsSL -o /tmp/lq-bootstrap.sh https://raw.githubusercontent.com/ike-sh/leikwan-toolkit/main/scripts/bootstrap.sh
+bash /tmp/lq-bootstrap.sh
+lq
+```
+
+## 常用命令
+
+```bash
+lq
+lq --version
 lq status
 lq status --verbose
 lq --doctor
