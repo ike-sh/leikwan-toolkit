@@ -1,5 +1,6 @@
 # Leikwan Toolkit
 
+<<<<<<< HEAD
 Leikwan Toolkit `1.4.2 LTS` is the Shell LTS line for local TCP/UDP forwarding, EasyTier relay / entry setup, nftables, IPv4 PBR, snapshots, status, doctor, and DDNS domain-resolution refresh.
 
 当前仓库只维护 Shell LTS：
@@ -8,13 +9,41 @@ Leikwan Toolkit `1.4.2 LTS` is the Shell LTS line for local TCP/UDP forwarding, 
 - `scripts/bootstrap.sh`
 - `docs/`
 - `tests/`
+=======
+Leikwan Toolkit Shell Core is `1.4.1 LTS`. This repository now keeps only the Shell LTS line: `leikwan-toolkit.sh`, `scripts/bootstrap.sh`, docs, and tests.
+>>>>>>> origin/main
 
 历史 `panel/` 实现已迁移到 `edge-tunnel-panel`，本仓库不恢复这些文件。
 
+<<<<<<< HEAD
 ## 快速开始
 
 ```bash
 lq init
+=======
+## Quick Start
+
+```bash
+curl -fsSL -o /tmp/lq-bootstrap.sh https://raw.githubusercontent.com/ike-sh/leikwan-toolkit/main/scripts/bootstrap.sh
+bash /tmp/lq-bootstrap.sh
+lq
+```
+
+Common commands:
+
+```bash
+export LEIKWAN_GITHUB_MIRRORS="https://gh.llkk.cc/,https://gh.ddlc.top/,https://gh-proxy.com/,https://ghproxy.net/"
+curl -fsSL -o /tmp/lq-bootstrap.sh https://raw.githubusercontent.com/ike-sh/leikwan-toolkit/main/scripts/bootstrap.sh
+bash /tmp/lq-bootstrap.sh
+lq
+```
+
+## 常用命令
+
+```bash
+lq
+lq --version
+>>>>>>> origin/main
 lq status
 lq status --verbose
 lq --doctor
