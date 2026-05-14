@@ -8,7 +8,7 @@ lq ddns status
 lq ddns enable
 ```
 
-1.4.1 LTS 的默认 DDNS 路径是“全局 IP 变化检测与自动刷新”：Toolkit 不修改 DNS 服务商记录，只检测公网 IP、域名解析变化，并刷新本地转发、resolved 缓存和 PBR。
+1.4.2 LTS 的默认 DDNS 路径是“域名解析变化自动刷新”：Toolkit 不修改 DNS 服务商记录，只在 B 侧检测 entries / forwards / PBR 域名解析变化，并刷新本地转发、resolved 缓存和 PBR。本机公网 IP 检测只作为辅助状态展示。
 
 ## 何时使用兼容入口
 

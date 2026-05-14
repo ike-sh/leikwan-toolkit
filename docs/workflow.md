@@ -193,7 +193,7 @@ lq pbr domain sync
 
 ## DDNS 后端 / 公网入口 / PBR 自动刷新
 
-如果后端目标、公网入口 `public_host` 或域名 PBR 使用动态域名，建议在配置稳定后启用全局 IP 变化检测：
+如果后端目标、公网入口 `public_host` 或域名 PBR 使用动态域名，建议在配置稳定后启用域名解析变化检测：
 
 ```bash
 lq ddns enable

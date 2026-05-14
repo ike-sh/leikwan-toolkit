@@ -52,7 +52,7 @@ before="$(state_file_manifest)"
 out="$(ddns_check_consistency)"
 after="$(state_file_manifest)"
 
-grep -q "DDNS / IP 变化一致性检查" <<<"$out"
+grep -q "DDNS / 域名解析一致性检查" <<<"$out"
 grep -q "public2 home.example.test resolved=198.51.100.10 cache=198.51.100.10 OK" <<<"$out"
 grep -q "host=home.example.test" <<<"$out"
 grep -q "match=OK" <<<"$out"

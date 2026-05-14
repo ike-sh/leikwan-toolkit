@@ -39,4 +39,20 @@ custom="$(public_ip_check_urls " https://a.example/ip ,https://b.example/ip")"
 grep -qx "https://a.example/ip" <<<"$custom"
 grep -qx "https://b.example/ip" <<<"$custom"
 
+curl() {
+  case "$*" in
+    *https://a.example/ip*) return 28 ;;
+    *https://b.example/ip*) printf '%s\n' "198.51.100.77" ;;
+    *) return 1 ;;
+  esac
+}
+
+detected_file="${TMP_DIR}/detected-ip.txt"
+detect_public_ipv4 "https://a.example/ip,https://b.example/ip" >"$detected_file" 2>/dev/null || true
+detected="$(cat "$detected_file")"
+[[ "$detected" == "198.51.100.77" ]]
+[[ "$DDNS_PUBLIC_IP" == "198.51.100.77" ]]
+[[ "$DDNS_PUBLIC_IP_SOURCE" == "https://b.example/ip" ]]
+[[ "$DDNS_PUBLIC_IP_FAILED" == "false" ]]
+
 echo "[OK] public IP source regression passed"

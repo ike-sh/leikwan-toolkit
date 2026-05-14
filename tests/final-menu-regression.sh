@@ -19,7 +19,7 @@ mkdir -p "$LEIKWAN_RUN_DIR"
 source "$ROOT_DIR/leikwan-toolkit.sh"
 
 main_out="$(print_main_menu_options)"
-grep -q "Leikwan Toolkit 1.4.1 LTS" <<<"$main_out"
+grep -q "Leikwan Toolkit 1.4.2 LTS" <<<"$main_out"
 grep -q "1. 快速组网" <<<"$main_out"
 grep -q "2. 利群主机 B" <<<"$main_out"
 grep -q "3. 公网入口 A" <<<"$main_out"
@@ -34,9 +34,9 @@ if grep -Eq '7\.|8\.|9\.' <<<"$main_out"; then
 fi
 
 ddns_out="$(print_ddns_menu_options)"
-grep -q "1. 开启 / 关闭全局 IP 变化检测" <<<"$ddns_out"
+grep -q "1. 开启 / 关闭域名解析变化检测" <<<"$ddns_out"
 grep -q "2. 立即检测并刷新" <<<"$ddns_out"
-grep -q "3. 查看 DDNS / IP 变化状态" <<<"$ddns_out"
+grep -q "3. 查看 DDNS / 域名解析状态" <<<"$ddns_out"
 grep -q "4. 查看 DDNS 日志" <<<"$ddns_out"
 grep -q "5. 高级设置" <<<"$ddns_out"
 grep -q "0. 返回" <<<"$ddns_out"

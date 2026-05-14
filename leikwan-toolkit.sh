@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-TOOL_VERSION="1.4.1"
+TOOL_VERSION="1.4.2"
 RELEASE_CHANNEL="LTS"
 PROJECT_NAME="leikwan-toolkit"
 PROJECT_TITLE="利群快速组网工具"
@@ -35,9 +35,21 @@ DDNS_ENTRY_FAILED_COUNT=0
 DDNS_PBR_DOMAIN_COUNT=0
 DDNS_PBR_CHANGED_COUNT=0
 DDNS_PBR_FAILED_COUNT=0
+DDNS_GLOBAL_DOMAIN_COUNT=0
+DDNS_GLOBAL_CHANGED_COUNT=0
+DDNS_GLOBAL_FAILED_COUNT=0
 DDNS_PUBLIC_IP=""
 DDNS_PUBLIC_IP_SOURCE=""
 DDNS_PUBLIC_IP_FAILED=false
+RESOLVE_SELECTED_IP=""
+RESOLVE_SELECTED_SOURCE=""
+RESOLVE_ALL_RESULTS=""
+RESOLVE_SPLIT_DETECTED=false
+DDNS_DNS_SPLIT_DETECTED=false
+DDNS_DNS_SPLIT_DOMAIN=""
+DDNS_DNS_SPLIT_RESULTS=""
+DDNS_DNS_SPLIT_SELECTED_IP=""
+DDNS_DNS_SPLIT_SELECTED_SOURCE=""
 
 LOG_FILE="${LEIKWAN_LOG_FILE:-/var/log/leikwan-toolkit.log}"
 STATE_DIR="${LEIKWAN_STATE_DIR:-/etc/leikwan-toolkit}"
@@ -62,6 +74,7 @@ DDNS_CONFIG="${STATE_DIR}/ddns-global.env"
 DDNS_LEGACY_CONFIG="${STATE_DIR}/ddns.env"
 DDNS_LOG_FILE="/var/log/leikwan-ddns-refresh.log"
 DDNS_STATUS_FILE="${STATUS_DIR}/last-ddns.env"
+DDNS_GLOBAL_RESOLVED_TSV="${STATUS_DIR}/resolved-ddns-domains.tsv"
 DDNS_SERVICE_NAME="leikwan-ddns-refresh"
 DDNS_SERVICE="/etc/systemd/system/${DDNS_SERVICE_NAME}.service"
 DDNS_TIMER="/etc/systemd/system/${DDNS_SERVICE_NAME}.timer"
@@ -150,6 +163,9 @@ DDNS_AUTO_SYNC_PBR_DEFAULT="true"
 DDNS_AUTO_RESTART_RELAY_DEFAULT="false"
 DDNS_UPDATE_DNS_RECORD_DEFAULT="false"
 PUBLIC_IP_CHECK_URLS_DEFAULT="https://api.ipify.org,https://ifconfig.me/ip,https://ipv4.icanhazip.com,https://4.ipw.cn,https://ip.3322.net,https://myip.ipip.net"
+DNS_RESOLVE_SERVERS_DEFAULT="1.1.1.1,8.8.8.8,223.5.5.5,119.29.29.29"
+DNS_RESOLVE_STRATEGY_DEFAULT="first-success"
+DNS_RESOLVE_WARN_ON_SPLIT_DEFAULT="true"
 ENTRY_DDNS_ENABLED_DEFAULT="false"
 ENTRY_DDNS_PROVIDER_DEFAULT="custom-url"
 ENTRY_DDNS_INTERVAL_DEFAULT="5min"
@@ -785,7 +801,7 @@ ${PROJECT_NAME} $(tool_version_label)
   传输层使用 EasyTier，转发层使用 nftables。
   默认 EasyTier 虚拟网段：${ET_NET}，relay：${RELAY_ET_IP}。
   默认 EasyTier 传输：TCP+UDP / ${DEFAULT_EASYTIER_PORT}，位于利群推荐白名单 ${FAST_PORT_RANGE_START}-${FAST_PORT_RANGE_END}。
-  DDNS 是全局 IP 变化检测与自动刷新：检测公网 IP、域名解析变化，并刷新本地转发 / PBR；默认不修改 DNS 服务商记录。
+  DDNS 是域名解析变化自动刷新：定时解析公网入口、转发目标和 PBR 域名，并刷新本地转发 / PBR；默认不修改 DNS 服务商记录。
   自更新只从 GitHub Release 包更新，并校验 sha256。
   不部署后端协议，不生成代理客户端链接。
 
@@ -1345,6 +1361,149 @@ resolve_ipv4_first() {
   if is_ipv4 "$host"; then printf '%s' "$host"; return 0; fi
   getent ahostsv4 "$host" 2>/dev/null | awk '$1 ~ /^[0-9]+\./ {print $1; exit}' ||
     getent ahosts "$host" 2>/dev/null | awk '$1 ~ /^[0-9]+\./ {print $1; exit}'
+}
+
+dns_resolve_servers() {
+  local value="${1:-}" server
+  local -a servers
+  [[ -n "$value" ]] || value="$(ddns_config_value DNS_RESOLVE_SERVERS "$DNS_RESOLVE_SERVERS_DEFAULT" 2>/dev/null || printf '%s' "$DNS_RESOLVE_SERVERS_DEFAULT")"
+  value="${value//$'\n'/,}"
+  value="${value//$'\r'/,}"
+  IFS=',' read -ra servers <<<"$value"
+  for server in "${servers[@]}"; do
+    server="$(trim_spaces "$server")"
+    [[ -n "$server" ]] && printf '%s\n' "$server"
+  done
+}
+
+normalize_dns_resolve_strategy() {
+  case "${1,,}" in
+    first-success|system-first|majority) printf '%s' "${1,,}" ;;
+    *) printf '%s' "$DNS_RESOLVE_STRATEGY_DEFAULT" ;;
+  esac
+}
+
+dns_resolve_one_ipv4() {
+  local host="$1" source="$2" output ip
+  if [[ "$source" == "system" ]]; then
+    ip="$(resolve_ipv4_first "$host" 2>/dev/null || true)"
+    [[ -n "$ip" ]] && { printf '%s' "$ip"; return 0; }
+    return 1
+  fi
+  command -v dig >/dev/null 2>&1 || return 1
+  output="$(dig +short "$host" A @"$source" 2>/dev/null || true)"
+  ip="$(extract_first_ipv4 "$output")"
+  [[ -n "$ip" ]] && { printf '%s' "$ip"; return 0; }
+  return 1
+}
+
+dns_result_escape() {
+  local value="$1"
+  value="${value//$'\n'/ }"
+  printf '%s' "$value"
+}
+
+ddns_note_dns_split() {
+  local domain="$1" results="$2" selected_ip="$3" selected_source="$4" strategy="$5" line
+  local -a _dns_split_lines
+  RESOLVE_SPLIT_DETECTED=true
+  DDNS_DNS_SPLIT_DETECTED=true
+  DDNS_DNS_SPLIT_DOMAIN="$domain"
+  DDNS_DNS_SPLIT_RESULTS="$results"
+  DDNS_DNS_SPLIT_SELECTED_IP="$selected_ip"
+  DDNS_DNS_SPLIT_SELECTED_SOURCE="$selected_source"
+  if ddns_config_bool DNS_RESOLVE_WARN_ON_SPLIT "$DNS_RESOLVE_WARN_ON_SPLIT_DEFAULT"; then
+    ddns_emit WARN "域名 ${domain} DNS 解析结果不一致："
+    IFS=';' read -ra _dns_split_lines <<<"$results"
+    for line in "${_dns_split_lines[@]}"; do
+      [[ -n "$line" ]] && ddns_emit WARN "  ${line}"
+    done
+    ddns_emit INFO "按 DNS_RESOLVE_STRATEGY=${strategy} 选择：${selected_ip}（source=${selected_source}）"
+  fi
+}
+
+resolve_domain_ipv4_multi() {
+  local host="$1" strategy configured_servers source ip selected_ip="" selected_source="" result_text="" unique_ips=""
+  local best_ip="" best_count=0 current_ip current_count line any_success=0 split_count=0
+  local -a sources ips labels
+  RESOLVE_SELECTED_IP=""
+  RESOLVE_SELECTED_SOURCE=""
+  RESOLVE_ALL_RESULTS=""
+  RESOLVE_SPLIT_DETECTED=false
+  if is_ipv4 "$host"; then
+    RESOLVE_SELECTED_IP="$host"
+    RESOLVE_SELECTED_SOURCE="literal"
+    RESOLVE_ALL_RESULTS="literal -> ${host}"
+    return 0
+  fi
+  configured_servers="$(ddns_config_value DNS_RESOLVE_SERVERS "$DNS_RESOLVE_SERVERS_DEFAULT")"
+  strategy="$(normalize_dns_resolve_strategy "$(ddns_config_value DNS_RESOLVE_STRATEGY "$DNS_RESOLVE_STRATEGY_DEFAULT")")"
+  case "$strategy" in
+    system-first) sources=("system") ;;
+    *) sources=() ;;
+  esac
+  while IFS= read -r source; do
+    [[ -n "$source" ]] && sources+=("$source")
+  done < <(dns_resolve_servers "$configured_servers")
+  [[ "$strategy" == "system-first" ]] || sources+=("system")
+  for source in "${sources[@]}"; do
+    [[ -n "$source" ]] || continue
+    if ip="$(dns_resolve_one_ipv4 "$host" "$source")"; then
+      any_success=1
+      ips+=("$ip")
+      labels+=("$source")
+      result_text="${result_text:+${result_text};}${source} -> ${ip}"
+      case "$strategy" in
+        first-success|system-first)
+          if [[ -z "$selected_ip" ]]; then
+            selected_ip="$ip"
+            selected_source="$source"
+          fi
+          ;;
+      esac
+    else
+      result_text="${result_text:+${result_text};}${source} -> fail"
+    fi
+  done
+  (( any_success == 1 )) || return 1
+  if [[ "$strategy" == "majority" ]]; then
+    for current_ip in "${ips[@]}"; do
+      current_count=0
+      for ip in "${ips[@]}"; do
+        [[ "$ip" == "$current_ip" ]] && current_count=$((current_count + 1))
+      done
+      if (( current_count > best_count )); then
+        best_count="$current_count"
+        best_ip="$current_ip"
+      fi
+    done
+    selected_ip="$best_ip"
+    for i in "${!ips[@]}"; do
+      if [[ "${ips[$i]}" == "$selected_ip" ]]; then
+        selected_source="${labels[$i]}"
+        break
+      fi
+    done
+  fi
+  [[ -n "$selected_ip" ]] || { selected_ip="${ips[0]}"; selected_source="${labels[0]}"; }
+  for ip in "${ips[@]}"; do
+    if [[ ";${unique_ips};" != *";${ip};"* ]]; then
+      unique_ips="${unique_ips:+${unique_ips};}${ip}"
+      split_count=$((split_count + 1))
+    fi
+  done
+  RESOLVE_SELECTED_IP="$selected_ip"
+  RESOLVE_SELECTED_SOURCE="$selected_source"
+  RESOLVE_ALL_RESULTS="$(dns_result_escape "$result_text")"
+  if (( split_count > 1 )); then
+    ddns_note_dns_split "$host" "$RESOLVE_ALL_RESULTS" "$selected_ip" "$selected_source" "$strategy"
+  fi
+  return 0
+}
+
+resolve_domain_ipv4_multi_value() {
+  resolve_domain_ipv4_multi "$1" >/dev/null || return 1
+  printf '%s' "$RESOLVE_SELECTED_IP"
 }
 
 easytier_validate_help() {
@@ -4579,7 +4738,11 @@ add_forward() {
   enabled="$(prompt_value "是否启用 true/false" "true")"
   [[ "$enabled" == "true" || "$enabled" == "false" ]] || { fail "enabled 必须是 true 或 false。"; return 1; }
   comment="$(prompt_value "备注" "${name}-target")"
-  target_ip="$(resolve_ipv4_first "$target_host" 2>/dev/null || true)"
+  if resolve_domain_ipv4_multi "$target_host"; then
+    target_ip="$RESOLVE_SELECTED_IP"
+  else
+    target_ip=""
+  fi
   if [[ -n "$target_ip" ]]; then
     if ! is_ipv4 "$target_host"; then
       info "检测到后端目标是域名，当前解析为：${target_ip}"
@@ -4776,7 +4939,11 @@ resolve_forwards() {
   content=$'# name\tentry_port\ttarget_host\tresolved_ip\ttarget_port\tout_iface\troute_table\tenabled\tlast_resolved_at\tcomment'
   while IFS=$'\034' read -r name entry_port target_host target_port out_iface route_table enabled comment; do
     old_ip="$(last_resolved_ip_for_forward "$name")"
-    target_ip="$(resolve_ipv4_first "$target_host" 2>/dev/null || true)"
+    if resolve_domain_ipv4_multi "$target_host"; then
+      target_ip="$RESOLVE_SELECTED_IP"
+    else
+      target_ip=""
+    fi
     if [[ -z "$target_ip" ]]; then
       if [[ -n "$old_ip" ]]; then
         warn "${name} 域名解析失败，继续使用上次解析 IP：${old_ip}"
@@ -4960,7 +5127,11 @@ entry_ddns_wait_resolved() {
   ENTRY_DDNS_WAIT_LAST_RESOLVED=""
   for ((i = 1; i <= retries; i++)); do
     entry_ddns_emit INFO "等待 DNS 生效：${i}/${retries}"
-    resolved="$(resolve_ipv4_first "$host" 2>/dev/null || true)"
+    if resolve_domain_ipv4_multi "$host"; then
+      resolved="$RESOLVE_SELECTED_IP"
+    else
+      resolved=""
+    fi
     ENTRY_DDNS_WAIT_LAST_RESOLVED="$resolved"
     if [[ "$resolved" == "$public_ip" ]]; then
       return 0
@@ -5004,7 +5175,11 @@ entry_ddns_run() {
     return 1
   fi
   entry_ddns_emit INFO "正在解析域名：${host}"
-  resolved_ip="$(resolve_ipv4_first "$host" 2>/dev/null || true)"
+    if resolve_domain_ipv4_multi "$host"; then
+      resolved_ip="$RESOLVE_SELECTED_IP"
+    else
+      resolved_ip=""
+    fi
   if [[ "$resolved_ip" == "$public_ip" ]]; then
     entry_ddns_emit OK "DDNS 已一致，无需更新。"
     entry_ddns_write_config "$enabled" "$host" "$provider" "$(entry_ddns_config_value ENTRY_DDNS_UPDATE_URL "")" "$(entry_ddns_config_value ENTRY_DDNS_UPDATE_CMD "")" "$(entry_ddns_config_value ENTRY_DDNS_TOKEN "")" "$public_ip" "$(entry_ddns_config_value ENTRY_DDNS_INTERVAL "$ENTRY_DDNS_INTERVAL_DEFAULT")" "$(entry_ddns_config_value ENTRY_DDNS_IP_SOURCE "$ENTRY_DDNS_IP_SOURCE_DEFAULT")"
@@ -5074,7 +5249,11 @@ entry_ddns_status() {
       resolved_ip="$last_resolved"
     else
       public_ip="$(entry_ddns_current_public_ip)"
-      resolved_ip="$(resolve_ipv4_first "$host" 2>/dev/null || true)"
+      if resolve_domain_ipv4_multi "$host"; then
+        resolved_ip="$RESOLVE_SELECTED_IP"
+      else
+        resolved_ip=""
+      fi
     fi
     echo "当前公网 IP: ${public_ip:-"-"}"
     echo "域名解析 IP: ${resolved_ip:-"-"}"
@@ -5104,7 +5283,7 @@ entry_ddns_setup() {
   warn "默认 DDNS_UPDATE_DNS_RECORD=false，不需要 DNS provider token。"
   echo "兼容 DNS 更新的作用："
   echo "把本机当前公网 IP 写入指定 DNS 记录。"
-  echo "全局 IP 变化检测只负责检测域名解析变化并刷新本地配置。"
+  echo "域名解析变化检测只负责检测公网入口、转发目标和 PBR 域名，并刷新本地配置。"
   echo "这是高级兼容能力，不是默认路径。"
   echo
   entry_ddns_ensure_config
@@ -5315,16 +5494,22 @@ ddns_write_config() {
   local auto_sync_domain_pbr="${8:-$(ddns_config_value DDNS_AUTO_SYNC_DOMAIN_PBR "$DDNS_AUTO_SYNC_DOMAIN_PBR_DEFAULT")}"
   local entry_auto_restart="${9:-$(ddns_config_value DDNS_AUTO_RESTART_RELAY "$(ddns_config_value DDNS_ENTRY_AUTO_RESTART_RELAY "$DDNS_ENTRY_AUTO_RESTART_RELAY_DEFAULT")")}"
   local keep_old="${10:-$(ddns_config_value DDNS_KEEP_OLD_ON_FAIL "$DDNS_KEEP_OLD_ON_FAIL_DEFAULT")}"
-  local public_ip_urls update_dns domains enabled auto_sync_pbr
+  local public_ip_urls update_dns domains enabled auto_sync_pbr dns_servers dns_strategy dns_warn_on_split
   enabled="$(ddns_config_value DDNS_GLOBAL_ENABLED "$DDNS_GLOBAL_ENABLED_DEFAULT")"
   domains="$(ddns_config_value DDNS_GLOBAL_DOMAINS "")"
   public_ip_urls="$(ddns_config_value PUBLIC_IP_CHECK_URLS "$PUBLIC_IP_CHECK_URLS_DEFAULT")"
+  dns_servers="$(ddns_config_value DNS_RESOLVE_SERVERS "$DNS_RESOLVE_SERVERS_DEFAULT")"
+  dns_strategy="$(normalize_dns_resolve_strategy "$(ddns_config_value DNS_RESOLVE_STRATEGY "$DNS_RESOLVE_STRATEGY_DEFAULT")")"
+  dns_warn_on_split="$(ddns_config_value DNS_RESOLVE_WARN_ON_SPLIT "$DNS_RESOLVE_WARN_ON_SPLIT_DEFAULT")"
   auto_sync_pbr="$(ddns_config_value DDNS_AUTO_SYNC_PBR "$DDNS_AUTO_SYNC_PBR_DEFAULT")"
   update_dns="$(ddns_config_value DDNS_UPDATE_DNS_RECORD "$DDNS_UPDATE_DNS_RECORD_DEFAULT")"
   write_file "$DDNS_CONFIG" "DDNS_GLOBAL_ENABLED=${enabled}
 DDNS_GLOBAL_INTERVAL=${interval}
 DDNS_GLOBAL_DOMAINS=${domains}
 PUBLIC_IP_CHECK_URLS=${public_ip_urls}
+DNS_RESOLVE_SERVERS=${dns_servers}
+DNS_RESOLVE_STRATEGY=${dns_strategy}
+DNS_RESOLVE_WARN_ON_SPLIT=${dns_warn_on_split}
 DDNS_AUTO_APPLY=${auto_apply}
 DDNS_AUTO_SYNC_PBR=${auto_sync_pbr}
 DDNS_AUTO_RESTART_RELAY=${entry_auto_restart}
@@ -5349,6 +5534,9 @@ ddns_ensure_config() {
   if ! grep -q '^DDNS_GLOBAL_ENABLED=' "$DDNS_CONFIG" 2>/dev/null ||
     ! grep -q '^DDNS_GLOBAL_INTERVAL=' "$DDNS_CONFIG" 2>/dev/null ||
     ! grep -q '^PUBLIC_IP_CHECK_URLS=' "$DDNS_CONFIG" 2>/dev/null ||
+    ! grep -q '^DNS_RESOLVE_SERVERS=' "$DDNS_CONFIG" 2>/dev/null ||
+    ! grep -q '^DNS_RESOLVE_STRATEGY=' "$DDNS_CONFIG" 2>/dev/null ||
+    ! grep -q '^DNS_RESOLVE_WARN_ON_SPLIT=' "$DDNS_CONFIG" 2>/dev/null ||
     ! grep -q '^DDNS_AUTO_SYNC_PBR=' "$DDNS_CONFIG" 2>/dev/null ||
     ! grep -q '^DDNS_AUTO_RESTART_RELAY=' "$DDNS_CONFIG" 2>/dev/null ||
     ! grep -q '^DDNS_UPDATE_DNS_RECORD=' "$DDNS_CONFIG" 2>/dev/null ||
@@ -5371,7 +5559,7 @@ ddns_emit() {
     *) line="[INFO] ${msg}" ;;
   esac
   echo "$line"
-  if (( DRY_RUN == 0 )) && [[ ${EUID:-$(id -u)} -eq 0 ]]; then
+  if (( DRY_RUN == 0 )) && (( LOG_DISABLED == 0 )) && [[ ${EUID:-$(id -u)} -eq 0 ]]; then
     mkdir -p "$(dirname "$DDNS_LOG_FILE")" 2>/dev/null || true
     printf '[%s] %s\n' "$(status_now)" "$line" >>"$DDNS_LOG_FILE" 2>/dev/null || true
   fi
@@ -5394,7 +5582,7 @@ ddns_log_quiet() {
 ddns_output_line() {
   local line="$1"
   echo "$line"
-  if (( DRY_RUN == 0 )) && [[ ${EUID:-$(id -u)} -eq 0 ]]; then
+  if (( DRY_RUN == 0 )) && (( LOG_DISABLED == 0 )) && [[ ${EUID:-$(id -u)} -eq 0 ]]; then
     mkdir -p "$(dirname "$DDNS_LOG_FILE")" 2>/dev/null || true
     printf '[%s] %s\n' "$(status_now)" "$line" >>"$DDNS_LOG_FILE" 2>/dev/null || true
   fi
@@ -5412,10 +5600,10 @@ ddns_action_text() {
 ddns_print_summary() {
   local result="$1"
   ddns_output_line ""
-  ddns_output_line "全局 IP 变化检测摘要"
+  ddns_output_line "域名解析变化检测摘要"
   ddns_output_line "----------------------------------------"
-  ddns_output_line "本机公网 IP: ${DDNS_PUBLIC_IP:-未检测}"
-  ddns_output_line "公网 IP 检测源: ${DDNS_PUBLIC_IP_SOURCE:-"-"}"
+  ddns_output_line "辅助公网 IP: ${DDNS_PUBLIC_IP:-未检测}"
+  ddns_output_line "辅助公网 IP 检测源: ${DDNS_PUBLIC_IP_SOURCE:-"-"}"
   ddns_output_line ""
   ddns_output_line "后端转发："
   ddns_output_line "- 检查 ${DDNS_FORWARD_CHECKED}"
@@ -5487,6 +5675,14 @@ ddns_write_last_status() {
   local forward_changed="$3" forward_failed="$4" entry_changed="$5" entry_failed="$6" pbr_changed="$7" pbr_failed="$8"
   local relay_restart_needed="$9" nft_applied="${10}" pbr_applied="${11}" relay_restarted="${12}"
   local public_ip="${13:-${DDNS_PUBLIC_IP:-}}" public_ip_source="${14:-${DDNS_PUBLIC_IP_SOURCE:-}}"
+  local dns_strategy dns_servers dns_split dns_split_domain dns_split_results dns_selected_ip dns_selected_source
+  dns_strategy="$(normalize_dns_resolve_strategy "$(ddns_config_value DNS_RESOLVE_STRATEGY "$DNS_RESOLVE_STRATEGY_DEFAULT")")"
+  dns_servers="$(ddns_config_value DNS_RESOLVE_SERVERS "$DNS_RESOLVE_SERVERS_DEFAULT")"
+  dns_split="${DDNS_DNS_SPLIT_DETECTED:-false}"
+  dns_split_domain="${DDNS_DNS_SPLIT_DOMAIN:-}"
+  dns_split_results="${DDNS_DNS_SPLIT_RESULTS:-}"
+  dns_selected_ip="${DDNS_DNS_SPLIT_SELECTED_IP:-}"
+  dns_selected_source="${DDNS_DNS_SPLIT_SELECTED_SOURCE:-}"
   (( DRY_RUN == 1 )) && return 0
   [[ ${EUID:-$(id -u)} -eq 0 ]] || return 0
   mkdir -p "$STATUS_DIR" 2>/dev/null || return 0
@@ -5508,10 +5704,20 @@ ddns_write_last_status() {
     printf 'LAST_DDNS_PBR_FAILED=%s\n' "$pbr_failed"
     printf 'LAST_DDNS_PBR_CHECKED=%s\n' "$DDNS_PBR_DOMAIN_COUNT"
     printf 'LAST_DDNS_PBR_FAILED_COUNT=%s\n' "$DDNS_PBR_FAILED_COUNT"
+    printf 'LAST_DDNS_GLOBAL_DOMAIN_CHECKED=%s\n' "$DDNS_GLOBAL_DOMAIN_COUNT"
+    printf 'LAST_DDNS_GLOBAL_DOMAIN_CHANGED_COUNT=%s\n' "$DDNS_GLOBAL_CHANGED_COUNT"
+    printf 'LAST_DDNS_GLOBAL_DOMAIN_FAILED_COUNT=%s\n' "$DDNS_GLOBAL_FAILED_COUNT"
     printf 'LAST_DDNS_RELAY_RESTART_NEEDED=%s\n' "$relay_restart_needed"
     printf 'LAST_DDNS_NFT_APPLIED=%s\n' "$nft_applied"
     printf 'LAST_DDNS_PBR_APPLIED=%s\n' "$pbr_applied"
     printf 'LAST_DDNS_RELAY_RESTARTED=%s\n' "$relay_restarted"
+    printf 'LAST_DDNS_DNS_STRATEGY=%s\n' "$dns_strategy"
+    printf 'LAST_DDNS_DNS_SERVERS=%s\n' "$dns_servers"
+    printf 'LAST_DDNS_DNS_SPLIT_DETECTED=%s\n' "$dns_split"
+    printf 'LAST_DDNS_DNS_SPLIT_DOMAIN=%s\n' "$dns_split_domain"
+    printf 'LAST_DDNS_DNS_SPLIT_RESULTS=%s\n' "$dns_split_results"
+    printf 'LAST_DDNS_DNS_SELECTED_IP=%s\n' "$dns_selected_ip"
+    printf 'LAST_DDNS_DNS_SELECTED_SOURCE=%s\n' "$dns_selected_source"
     printf 'LAST_DDNS_VERSION=%s\n' "$TOOL_VERSION"
   } >"$DDNS_STATUS_FILE"
   chmod 600 "$DDNS_STATUS_FILE" 2>/dev/null || true
@@ -5543,6 +5749,31 @@ last_resolved_ip_for_entry() {
 last_resolved_changed_for_entry() {
   local name="$1"
   resolved_entries_rows | awk -F'\t' -v n="$name" '$1==n && $5!="" {print $5; exit}'
+}
+
+last_resolved_ip_for_global_domain() {
+  local host="$1"
+  [[ -f "$DDNS_GLOBAL_RESOLVED_TSV" ]] || return 0
+  awk -F'\t' -v h="$host" '$1==h && $2!="" {print $2; exit}' "$DDNS_GLOBAL_RESOLVED_TSV"
+}
+
+last_resolved_changed_for_global_domain() {
+  local host="$1"
+  [[ -f "$DDNS_GLOBAL_RESOLVED_TSV" ]] || return 0
+  awk -F'\t' -v h="$host" '$1==h && $4!="" {print $4; exit}' "$DDNS_GLOBAL_RESOLVED_TSV"
+}
+
+ddns_global_domain_list() {
+  local value host
+  local -a _ddns_global_domain_items
+  value="$(ddns_config_value DDNS_GLOBAL_DOMAINS "")"
+  value="${value//$'\n'/,}"
+  value="${value//$'\r'/,}"
+  IFS=',' read -ra _ddns_global_domain_items <<<"$value"
+  for host in "${_ddns_global_domain_items[@]}"; do
+    host="$(trim_spaces "$host")"
+    [[ -n "$host" ]] && printf '%s\n' "$host"
+  done
 }
 
 ddns_scope_requested() {
@@ -5595,7 +5826,11 @@ ddns_refresh_forwards_scope() {
       target_ip="$target_host"
     elif [[ "$enabled" == "true" ]] && is_domain_name "$target_host"; then
       domain_count=$((domain_count + 1))
-      target_ip="$(resolve_ipv4_first "$target_host" 2>/dev/null || true)"
+      if resolve_domain_ipv4_multi "$target_host"; then
+        target_ip="$RESOLVE_SELECTED_IP"
+      else
+        target_ip=""
+      fi
       if [[ -z "$target_ip" ]]; then
         failed_count=$((failed_count + 1))
         DDNS_FORWARD_FAILED="${DDNS_FORWARD_FAILED:+${DDNS_FORWARD_FAILED},}${name}"
@@ -5624,7 +5859,11 @@ ddns_refresh_forwards_scope() {
     else
       target_ip="$old_ip"
       if [[ -z "$target_ip" ]] && is_domain_name "$target_host"; then
-        target_ip="$(resolve_ipv4_first "$target_host" 2>/dev/null || true)"
+        if resolve_domain_ipv4_multi "$target_host" >/dev/null; then
+          target_ip="$RESOLVE_SELECTED_IP"
+        else
+          target_ip=""
+        fi
       fi
     fi
     [[ -n "$target_ip" ]] || continue
@@ -5650,7 +5889,11 @@ ddns_refresh_entries_scope() {
       if [[ "$enabled" == "true" ]]; then
         entry_count=$((entry_count + 1))
         domain_count=$((domain_count + 1))
-        new_ip="$(resolve_ipv4_first "$public_host" 2>/dev/null || true)"
+        if resolve_domain_ipv4_multi "$public_host"; then
+          new_ip="$RESOLVE_SELECTED_IP"
+        else
+          new_ip=""
+        fi
         if [[ -z "$new_ip" ]]; then
           failed_count=$((failed_count + 1))
           DDNS_ENTRY_FAILED="${DDNS_ENTRY_FAILED:+${DDNS_ENTRY_FAILED},}${name}"
@@ -5690,6 +5933,50 @@ ddns_refresh_entries_scope() {
   DDNS_ENTRY_DOMAIN_COUNT="$domain_count"
   DDNS_ENTRY_CHANGED_COUNT="$changed_count"
   DDNS_ENTRY_FAILED_COUNT="$failed_count"
+}
+
+ddns_refresh_global_domains_scope() {
+  local checked_at host old_ip new_ip old_changed last_changed content domain_count=0 changed_count=0 failed_count=0
+  checked_at="$(status_now)"
+  content=$'# host\tresolved_ip\tlast_checked\tlast_changed'
+  while IFS= read -r host; do
+    [[ -n "$host" ]] || continue
+    is_domain_name "$host" || { ddns_emit WARN "DDNS_GLOBAL_DOMAINS 中的值不是域名：${host}"; continue; }
+    domain_count=$((domain_count + 1))
+    old_ip="$(last_resolved_ip_for_global_domain "$host")"
+    old_changed="$(last_resolved_changed_for_global_domain "$host")"
+    if resolve_domain_ipv4_multi "$host"; then
+      new_ip="$RESOLVE_SELECTED_IP"
+    else
+      new_ip=""
+    fi
+    if [[ -z "$new_ip" ]]; then
+      failed_count=$((failed_count + 1))
+      if [[ -n "$old_ip" ]]; then
+        ddns_emit WARN "全局域名 ${host} 解析失败，保留旧 IP：${old_ip}"
+        new_ip="$old_ip"
+        last_changed="${old_changed:-$checked_at}"
+      else
+        ddns_emit WARN "全局域名 ${host} 解析失败，且没有旧 IP。"
+        continue
+      fi
+    elif [[ -z "$old_ip" ]]; then
+      ddns_emit OK "全局域名 ${host} 解析已记录：${new_ip}"
+      last_changed="$checked_at"
+    elif [[ "$old_ip" == "$new_ip" ]]; then
+      ddns_emit OK "全局域名 ${host} 解析未变化：${new_ip}"
+      last_changed="${old_changed:-$checked_at}"
+    else
+      changed_count=$((changed_count + 1))
+      ddns_emit WARN "全局域名 ${host} 解析变化：${old_ip:-none} -> ${new_ip}"
+      last_changed="$checked_at"
+    fi
+    content="${content}"$'\n'"${host}"$'\t'"${new_ip}"$'\t'"${checked_at}"$'\t'"${last_changed}"
+  done < <(ddns_global_domain_list)
+  write_file "$DDNS_GLOBAL_RESOLVED_TSV" "$content" 600
+  DDNS_GLOBAL_DOMAIN_COUNT="$domain_count"
+  DDNS_GLOBAL_CHANGED_COUNT="$changed_count"
+  DDNS_GLOBAL_FAILED_COUNT="$failed_count"
 }
 
 ddns_maybe_restart_relay() {
@@ -5752,6 +6039,7 @@ ddns_refresh_once() {
   DDNS_FORWARD_CHECKED=0; DDNS_FORWARD_DOMAIN_COUNT=0; DDNS_FORWARD_CHANGED_COUNT=0; DDNS_FORWARD_FAILED_COUNT=0
   DDNS_ENTRY_CHECKED=0; DDNS_ENTRY_DOMAIN_COUNT=0; DDNS_ENTRY_CHANGED_COUNT=0; DDNS_ENTRY_FAILED_COUNT=0
   DDNS_PBR_DOMAIN_COUNT=0; DDNS_PBR_CHANGED_COUNT=0; DDNS_PBR_FAILED_COUNT=0
+  DDNS_GLOBAL_DOMAIN_COUNT=0; DDNS_GLOBAL_CHANGED_COUNT=0; DDNS_GLOBAL_FAILED_COUNT=0
   if ! lock_acquire "$DDNS_LOCK_PATH" "DDNS 刷新" ddns_lock; then
     ddns_write_last_status "skipped" "$scope" "" "" "" "" "" "" false false false false
     return 0
@@ -5761,15 +6049,18 @@ ddns_refresh_once() {
     ddns_write_last_status "skipped" "$scope" "" "" "" "" "" "" false false false false
     return 0
   fi
-  ddns_emit INFO "全局 IP 变化检测开始，scope=${scope}。"
-  public_ip="$(detect_public_ipv4 2>/dev/null || true)"
-  if [[ -n "$public_ip" ]]; then
-    DDNS_PUBLIC_IP="$public_ip"
-    ddns_emit OK "本机公网 IP：${DDNS_PUBLIC_IP}（${DDNS_PUBLIC_IP_SOURCE:-unknown}）"
+  DDNS_DNS_SPLIT_DETECTED=false
+  DDNS_DNS_SPLIT_DOMAIN=""
+  DDNS_DNS_SPLIT_RESULTS=""
+  DDNS_DNS_SPLIT_SELECTED_IP=""
+  DDNS_DNS_SPLIT_SELECTED_SOURCE=""
+  ddns_emit INFO "域名解析变化检测开始，scope=${scope}。"
+  if detect_public_ipv4 >/dev/null; then
+    public_ip="$DDNS_PUBLIC_IP"
+    ddns_emit OK "辅助公网 IP：${DDNS_PUBLIC_IP}（source=${DDNS_PUBLIC_IP_SOURCE:-unknown}）"
   else
     DDNS_PUBLIC_IP_FAILED=true
-    result="warn"
-    ddns_emit WARN "本机公网 IP 检测失败，继续检测域名解析变化并保留现有配置。"
+    ddns_emit WARN "本机公网 IP 检测失败，仅影响辅助状态；继续检测域名解析变化并保留现有配置。"
   fi
   auto_apply="$(ddns_config_value DDNS_AUTO_APPLY "$DDNS_AUTO_APPLY_DEFAULT")"
   auto_fix="$(ddns_config_value DDNS_AUTO_FIX_ROUTE "$DDNS_AUTO_FIX_ROUTE_DEFAULT")"
@@ -5802,6 +6093,9 @@ ddns_refresh_once() {
     else
       ddns_emit INFO "pbr scope 已禁用。"
     fi
+  fi
+  if [[ "$scope" == "all" ]]; then
+    ddns_refresh_global_domains_scope || result="warn"
   fi
   if (( DDNS_FORWARD_NEED_APPLY == 1 )); then
     if [[ "${auto_apply,,}" == "true" ]]; then
@@ -5862,7 +6156,7 @@ ddns_refresh_once() {
     ddns_print_entry_detection_section
   fi
   ddns_write_last_status "$result" "$scope" "$DDNS_FORWARD_CHANGED" "$DDNS_FORWARD_FAILED" "$DDNS_ENTRY_CHANGED" "$DDNS_ENTRY_FAILED" "$DDNS_PBR_CHANGED" "$DDNS_PBR_FAILED" "$DDNS_RELAY_RESTART_NEEDED" "$DDNS_NFT_APPLIED" "$DDNS_PBR_APPLIED" "$DDNS_RELAY_RESTARTED"
-  ddns_emit INFO "全局 IP 变化检测结束：$(status_result_display "$result")。"
+  ddns_emit INFO "域名解析变化检测结束：$(status_result_display "$result")。"
   global_lock_release
   lock_release "$ddns_lock"
 }
@@ -5934,11 +6228,11 @@ ddns_enable_timer() {
     fi
   fi
   ddns_install_units
-  info "将每 $(ddns_config_value DDNS_GLOBAL_INTERVAL "$(ddns_config_value DDNS_REFRESH_INTERVAL "$DDNS_REFRESH_INTERVAL_DEFAULT")") 执行全局 IP 变化检测。"
-  warn "默认不修改 DNS 服务商记录，relay 也不会自动重启。"
   if command -v systemctl >/dev/null 2>&1; then
     systemctl enable --now "${DDNS_SERVICE_NAME}.timer"
-    ok "全局 IP 变化检测 timer 已启用。"
+    ok "域名解析变化检测 timer 已启用。"
+    info "将每 $(ddns_config_value DDNS_GLOBAL_INTERVAL "$(ddns_config_value DDNS_REFRESH_INTERVAL "$DDNS_REFRESH_INTERVAL_DEFAULT")") 执行一次域名解析变化检测与本地刷新。"
+    info "默认不修改 DNS 服务商记录，也不会自动重启 relay。"
   else
     warn "未找到 systemctl，无法启用 DDNS timer。"
     return 1
@@ -5952,7 +6246,7 @@ ddns_disable_timer() {
   fi
   if command -v systemctl >/dev/null 2>&1; then
     systemctl disable --now "${DDNS_SERVICE_NAME}.timer" 2>/dev/null || true
-    ok "全局 IP 变化检测 timer 已禁用。"
+    ok "域名解析变化检测 timer 已关闭。"
   else
     warn "未找到 systemctl，无法禁用 DDNS timer。"
   fi
@@ -5962,6 +6256,8 @@ ddns_status() {
   local timer_state interval auto_enabled update_dns
   local last_time last_result last_scope forward_changed forward_failed entry_changed entry_failed pbr_changed pbr_failed
   local relay_restart_needed nft_applied pbr_applied relay_restarted public_ip public_ip_source
+  local dns_strategy dns_servers dns_split dns_split_domain dns_split_results dns_selected_ip dns_selected_source dns_line
+  local -a _ddns_status_dns_lines
   local forward_count entry_count pbr_count forward_checked entry_checked pbr_checked
   local forward_changed_count forward_failed_count entry_changed_count entry_failed_count pbr_changed_count pbr_failed_count
   local nft_text pbr_text
@@ -5985,6 +6281,15 @@ ddns_status() {
   nft_applied="$(env_file_get "$DDNS_STATUS_FILE" LAST_DDNS_NFT_APPLIED)"
   pbr_applied="$(env_file_get "$DDNS_STATUS_FILE" LAST_DDNS_PBR_APPLIED)"
   relay_restarted="$(env_file_get "$DDNS_STATUS_FILE" LAST_DDNS_RELAY_RESTARTED)"
+  dns_strategy="$(env_file_get "$DDNS_STATUS_FILE" LAST_DDNS_DNS_STRATEGY)"
+  [[ -n "$dns_strategy" ]] || dns_strategy="$(normalize_dns_resolve_strategy "$(ddns_config_value DNS_RESOLVE_STRATEGY "$DNS_RESOLVE_STRATEGY_DEFAULT")")"
+  dns_servers="$(env_file_get "$DDNS_STATUS_FILE" LAST_DDNS_DNS_SERVERS)"
+  [[ -n "$dns_servers" ]] || dns_servers="$(ddns_config_value DNS_RESOLVE_SERVERS "$DNS_RESOLVE_SERVERS_DEFAULT")"
+  dns_split="$(env_file_get "$DDNS_STATUS_FILE" LAST_DDNS_DNS_SPLIT_DETECTED)"
+  dns_split_domain="$(env_file_get "$DDNS_STATUS_FILE" LAST_DDNS_DNS_SPLIT_DOMAIN)"
+  dns_split_results="$(env_file_get "$DDNS_STATUS_FILE" LAST_DDNS_DNS_SPLIT_RESULTS)"
+  dns_selected_ip="$(env_file_get "$DDNS_STATUS_FILE" LAST_DDNS_DNS_SELECTED_IP)"
+  dns_selected_source="$(env_file_get "$DDNS_STATUS_FILE" LAST_DDNS_DNS_SELECTED_SOURCE)"
   forward_count="$(ddns_domain_forward_count 2>/dev/null || printf '0')"
   entry_count="$(ddns_domain_entry_count 2>/dev/null || printf '0')"
   pbr_count="$(ddns_domain_pbr_count 2>/dev/null || printf '0')"
@@ -6011,12 +6316,19 @@ ddns_status() {
   if [[ "${last_result,,}" == "fail" && "${pbr_applied:-false}" != "true" && -n "$pbr_changed" ]]; then
     pbr_text="失败"
   fi
-  echo "DDNS / IP 变化检测状态"
+  echo "DDNS / 域名解析状态"
   echo "----------------------------------------"
   echo "自动检测: $(bool_enabled_disabled "$auto_enabled")"
   echo "检测间隔: ${interval}"
-  echo "本机公网 IP: ${public_ip:-未检测}"
-  echo "公网 IP 检测源: ${public_ip_source:-"-"}"
+  echo "辅助公网 IP: ${public_ip:-未检测}"
+  echo "辅助公网 IP 检测源: ${public_ip_source:-"-"}"
+  echo "DNS 解析策略: ${dns_strategy}"
+  echo "DNS 解析器: ${dns_servers}"
+  if [[ "${dns_split,,}" == "true" ]]; then
+    echo "DNS 传播状态: 不一致"
+  else
+    echo "DNS 传播状态: 一致"
+  fi
   echo "后端域名: checked ${forward_checked}, changed ${forward_changed_count}, failed ${forward_failed_count}"
   echo "公网入口域名: checked ${entry_checked}, changed ${entry_changed_count}, failed ${entry_failed_count}"
   echo "PBR 域名: checked ${pbr_checked}, changed ${pbr_changed_count}, failed ${pbr_failed_count}"
@@ -6028,6 +6340,16 @@ ddns_status() {
   echo "结果: $(status_result_display "${last_result:-unknown}")"
   if [[ "${update_dns,,}" == "true" ]]; then
     echo "[WARN] DDNS_UPDATE_DNS_RECORD=true，高级兼容 DNS 更新能力已显式启用。"
+  fi
+  if [[ "${dns_split,,}" == "true" ]]; then
+    echo
+    echo "最近 DNS 分歧:"
+    echo "${dns_split_domain:-未知域名}"
+    IFS=';' read -ra _ddns_status_dns_lines <<<"$dns_split_results"
+    for dns_line in "${_ddns_status_dns_lines[@]}"; do
+      [[ -n "$dns_line" ]] && echo "$dns_line"
+    done
+    echo "当前采用: ${dns_selected_ip:-"-"}${dns_selected_source:+（source=${dns_selected_source}）}"
   fi
   [[ -n "$last_scope" ]] && echo "详细分类: ${last_scope}"
 }
@@ -6083,14 +6405,18 @@ ddns_overview() {
 ddns_check_consistency() {
   local result="OK" printed_b=0 name public_host _et_ip _proto _port _weight enabled resolved cached
   local host public_ip resolved_ip match
-  echo "DDNS / IP 变化一致性检查"
+  echo "DDNS / 域名解析一致性检查"
   echo "----------------------------------------"
   echo "公网入口缓存:"
   while IFS=$'\t' read -r name public_host _et_ip _proto _port _weight enabled; do
     [[ "$enabled" == "true" ]] || continue
     is_domain_name "$public_host" || continue
     printed_b=1
-    resolved="$(resolve_ipv4_first "$public_host" 2>/dev/null || true)"
+    if resolve_domain_ipv4_multi "$public_host"; then
+      resolved="$RESOLVE_SELECTED_IP"
+    else
+      resolved=""
+    fi
     cached="$(last_resolved_ip_for_entry "$name")"
     if [[ -n "$resolved" && -n "$cached" && "$resolved" == "$cached" ]]; then
       echo "- ${name} ${public_host} resolved=${resolved} cache=${cached} OK"
@@ -6109,7 +6435,11 @@ ddns_check_consistency() {
     echo "未配置"
   else
     public_ip="$(entry_ddns_current_public_ip)"
-    resolved_ip="$(resolve_ipv4_first "$host" 2>/dev/null || true)"
+    if resolve_domain_ipv4_multi "$host"; then
+      resolved_ip="$RESOLVE_SELECTED_IP"
+    else
+      resolved_ip=""
+    fi
     match="WARN"
     if [[ -n "$public_ip" && -n "$resolved_ip" && "$public_ip" == "$resolved_ip" ]]; then
       match="OK"
@@ -6226,7 +6556,7 @@ ddns_set_interval() {
   ddns_ensure_config
   local choice interval refresh_forwards refresh_entries refresh_pbr auto_apply auto_fix auto_sync_forward_pbr auto_sync_domain_pbr entry_auto_restart keep_old
   echo
-  echo "设置全局 IP 变化检测间隔："
+  echo "设置域名解析变化检测间隔："
   echo "1. 5min"
   echo "2. 10min"
   echo "3. 30min"
@@ -6252,7 +6582,7 @@ ddns_set_interval() {
   keep_old="$(ddns_config_value DDNS_KEEP_OLD_ON_FAIL "$DDNS_KEEP_OLD_ON_FAIL_DEFAULT")"
   ddns_write_config "$interval" "$refresh_forwards" "$refresh_entries" "$refresh_pbr" "$auto_apply" "$auto_fix" "$auto_sync_forward_pbr" "$auto_sync_domain_pbr" "$entry_auto_restart" "$keep_old"
   ddns_install_units
-  ok "全局 IP 变化检测间隔已设置为：${interval}"
+  ok "域名解析变化检测间隔已设置为：${interval}"
   if command -v systemctl >/dev/null 2>&1 && systemctl is-enabled --quiet "${DDNS_SERVICE_NAME}.timer" 2>/dev/null; then
     systemctl restart "${DDNS_SERVICE_NAME}.timer" || warn "DDNS timer 重启失败，请稍后手动检查。"
   fi
@@ -6260,17 +6590,20 @@ ddns_set_interval() {
 
 ddns_toggle_menu() {
   local choice
-  print_menu_header "全局 IP 变化检测"
-  echo "1. 开启全局 IP 变化检测"
-  echo "2. 关闭全局 IP 变化检测"
-  echo "0. 返回"
-  choice="$(prompt_menu_choice "请选择：")"
-  case "$choice" in
-    1) ddns_enable_timer ;;
-    2) ddns_disable_timer ;;
-    0|"") return 0 ;;
-    *) menu_invalid_choice ;;
-  esac
+  while true; do
+    print_menu_header "域名解析变化检测"
+    echo "1. 开启域名解析变化检测"
+    echo "2. 关闭域名解析变化检测"
+    echo "0. 返回"
+    choice="$(prompt_menu_choice "请选择：")"
+    case "$choice" in
+      1) run_menu_action_pause ddns_enable_timer ;;
+      2) run_menu_action_pause ddns_disable_timer ;;
+      0) return 0 ;;
+      "") menu_input_required ;;
+      *) menu_invalid_choice ;;
+    esac
+  done
 }
 
 entry_ddns_toggle_menu() {
@@ -6290,7 +6623,7 @@ entry_ddns_toggle_menu() {
 
 ddns_status_logs_menu() {
   local choice
-  print_menu_header "DDNS / IP 变化状态 / 日志"
+  print_menu_header "DDNS / 域名解析状态 / 日志"
   echo "1. 查看状态"
   echo "2. 查看日志"
   echo "3. 查看总览"
@@ -6324,9 +6657,9 @@ ddns_set_public_ip_urls() {
   need_root_unless_dry_run
   ddns_ensure_config
   local urls
-  echo "当前公网 IP 检测 URL 池："
+  echo "当前辅助公网地址检测 URL 池："
   echo "$(ddns_config_value PUBLIC_IP_CHECK_URLS "$PUBLIC_IP_CHECK_URLS_DEFAULT")"
-  urls="$(prompt_value "新的 URL 池（逗号分隔）" "$(ddns_config_value PUBLIC_IP_CHECK_URLS "$PUBLIC_IP_CHECK_URLS_DEFAULT")")"
+  urls="$(prompt_value "新的辅助公网地址检测 URL 池（逗号分隔）" "$(ddns_config_value PUBLIC_IP_CHECK_URLS "$PUBLIC_IP_CHECK_URLS_DEFAULT")")"
   [[ -n "$urls" ]] || urls="$PUBLIC_IP_CHECK_URLS_DEFAULT"
   if (( DRY_RUN == 1 )); then
     echo "[DRY-RUN] PUBLIC_IP_CHECK_URLS=${urls}"
@@ -6338,14 +6671,77 @@ ddns_set_public_ip_urls() {
   else
     printf 'PUBLIC_IP_CHECK_URLS=%s\n' "$(env_value_one_line "$urls")" >>"$DDNS_CONFIG"
   fi
-  ok "公网 IP 检测 URL 池已更新。"
+  ok "辅助公网地址检测 URL 池已更新。"
+}
+
+ddns_set_dns_resolvers() {
+  need_root_unless_dry_run
+  ddns_ensure_config
+  local servers
+  echo "当前 DNS 解析器列表："
+  echo "$(ddns_config_value DNS_RESOLVE_SERVERS "$DNS_RESOLVE_SERVERS_DEFAULT")"
+  servers="$(prompt_value "新的 DNS 解析器列表（逗号分隔）" "$(ddns_config_value DNS_RESOLVE_SERVERS "$DNS_RESOLVE_SERVERS_DEFAULT")")"
+  [[ -n "$servers" ]] || servers="$DNS_RESOLVE_SERVERS_DEFAULT"
+  if (( DRY_RUN == 1 )); then
+    echo "[DRY-RUN] DNS_RESOLVE_SERVERS=${servers}"
+    return 0
+  fi
+  touch "$DDNS_CONFIG"
+  if grep -q '^DNS_RESOLVE_SERVERS=' "$DDNS_CONFIG" 2>/dev/null; then
+    sed -i "s#^DNS_RESOLVE_SERVERS=.*#DNS_RESOLVE_SERVERS=$(env_value_one_line "$servers")#" "$DDNS_CONFIG"
+  else
+    printf 'DNS_RESOLVE_SERVERS=%s\n' "$(env_value_one_line "$servers")" >>"$DDNS_CONFIG"
+  fi
+  ok "DNS 解析器列表已更新。"
+}
+
+ddns_set_dns_strategy() {
+  need_root_unless_dry_run
+  ddns_ensure_config
+  local strategy
+  echo "当前 DNS 解析策略：$(ddns_config_value DNS_RESOLVE_STRATEGY "$DNS_RESOLVE_STRATEGY_DEFAULT")"
+  echo "可选：first-success / system-first / majority"
+  strategy="$(prompt_value "新的 DNS 解析策略" "$(ddns_config_value DNS_RESOLVE_STRATEGY "$DNS_RESOLVE_STRATEGY_DEFAULT")")"
+  strategy="$(normalize_dns_resolve_strategy "$strategy")"
+  if (( DRY_RUN == 1 )); then
+    echo "[DRY-RUN] DNS_RESOLVE_STRATEGY=${strategy}"
+    return 0
+  fi
+  touch "$DDNS_CONFIG"
+  if grep -q '^DNS_RESOLVE_STRATEGY=' "$DDNS_CONFIG" 2>/dev/null; then
+    sed -i "s#^DNS_RESOLVE_STRATEGY=.*#DNS_RESOLVE_STRATEGY=$(env_value_one_line "$strategy")#" "$DDNS_CONFIG"
+  else
+    printf 'DNS_RESOLVE_STRATEGY=%s\n' "$(env_value_one_line "$strategy")" >>"$DDNS_CONFIG"
+  fi
+  ok "DNS 解析策略已更新：${strategy}"
+}
+
+ddns_show_recent_dns_split() {
+  local split domain results selected_ip selected_source line
+  local -a lines
+  split="$(env_file_get "$DDNS_STATUS_FILE" LAST_DDNS_DNS_SPLIT_DETECTED)"
+  if [[ "${split,,}" != "true" ]]; then
+    info "最近一次检测没有发现 DNS 传播分歧。"
+    return 0
+  fi
+  domain="$(env_file_get "$DDNS_STATUS_FILE" LAST_DDNS_DNS_SPLIT_DOMAIN)"
+  results="$(env_file_get "$DDNS_STATUS_FILE" LAST_DDNS_DNS_SPLIT_RESULTS)"
+  selected_ip="$(env_file_get "$DDNS_STATUS_FILE" LAST_DDNS_DNS_SELECTED_IP)"
+  selected_source="$(env_file_get "$DDNS_STATUS_FILE" LAST_DDNS_DNS_SELECTED_SOURCE)"
+  echo "最近 DNS 分歧:"
+  echo "${domain:-未知域名}"
+  IFS=';' read -ra lines <<<"$results"
+  for line in "${lines[@]}"; do
+    [[ -n "$line" ]] && echo "$line"
+  done
+  echo "当前采用: ${selected_ip:-"-"}${selected_source:+（source=${selected_source}）}"
 }
 
 ddns_toggle_auto_apply() {
   need_root_unless_dry_run
   ddns_ensure_config
   local value
-  if prompt_yes_no "IP 变化后自动重应用 nftables？" "$(bool_to_default "$(ddns_config_value DDNS_AUTO_APPLY "$DDNS_AUTO_APPLY_DEFAULT")")"; then value="true"; else value="false"; fi
+  if prompt_yes_no "域名解析变化后自动重应用 nftables？" "$(bool_to_default "$(ddns_config_value DDNS_AUTO_APPLY "$DDNS_AUTO_APPLY_DEFAULT")")"; then value="true"; else value="false"; fi
   ddns_write_config "$(ddns_config_value DDNS_GLOBAL_INTERVAL "$(ddns_config_value DDNS_REFRESH_INTERVAL "$DDNS_GLOBAL_INTERVAL_DEFAULT")")" \
     "$(ddns_config_value DDNS_REFRESH_FORWARDS "$DDNS_REFRESH_FORWARDS_DEFAULT")" \
     "$(ddns_config_value DDNS_REFRESH_ENTRIES "$DDNS_REFRESH_ENTRIES_DEFAULT")" \
@@ -6363,7 +6759,7 @@ ddns_toggle_auto_sync_pbr() {
   need_root_unless_dry_run
   ddns_ensure_config
   local value
-  if prompt_yes_no "IP 变化后自动同步 PBR？" "$(bool_to_default "$(ddns_config_value DDNS_AUTO_SYNC_PBR "$DDNS_AUTO_SYNC_PBR_DEFAULT")")"; then value="true"; else value="false"; fi
+  if prompt_yes_no "域名解析变化后自动同步 PBR？" "$(bool_to_default "$(ddns_config_value DDNS_AUTO_SYNC_PBR "$DDNS_AUTO_SYNC_PBR_DEFAULT")")"; then value="true"; else value="false"; fi
   ddns_write_config "$(ddns_config_value DDNS_GLOBAL_INTERVAL "$(ddns_config_value DDNS_REFRESH_INTERVAL "$DDNS_GLOBAL_INTERVAL_DEFAULT")")" \
     "$(ddns_config_value DDNS_REFRESH_FORWARDS "$DDNS_REFRESH_FORWARDS_DEFAULT")" \
     "$(ddns_config_value DDNS_REFRESH_ENTRIES "$DDNS_REFRESH_ENTRIES_DEFAULT")" \
@@ -6383,7 +6779,7 @@ ddns_toggle_auto_restart_relay() {
   need_root_unless_dry_run
   ddns_ensure_config
   local value
-  if prompt_yes_no "允许 IP 变化后自动重启 relay？" "$(bool_to_default "$(ddns_config_value DDNS_AUTO_RESTART_RELAY "$DDNS_AUTO_RESTART_RELAY_DEFAULT")")"; then value="true"; else value="false"; fi
+  if prompt_yes_no "允许公网入口域名解析变化后自动重启 relay？" "$(bool_to_default "$(ddns_config_value DDNS_AUTO_RESTART_RELAY "$DDNS_AUTO_RESTART_RELAY_DEFAULT")")"; then value="true"; else value="false"; fi
   ddns_write_config "$(ddns_config_value DDNS_GLOBAL_INTERVAL "$(ddns_config_value DDNS_REFRESH_INTERVAL "$DDNS_GLOBAL_INTERVAL_DEFAULT")")" \
     "$(ddns_config_value DDNS_REFRESH_FORWARDS "$DDNS_REFRESH_FORWARDS_DEFAULT")" \
     "$(ddns_config_value DDNS_REFRESH_ENTRIES "$DDNS_REFRESH_ENTRIES_DEFAULT")" \
@@ -6420,20 +6816,26 @@ ddns_advanced_menu() {
   while true; do
     print_menu_header "DDNS 高级设置"
     echo "1. 设置检测间隔"
-    echo "2. 设置公网 IP 检测 URL 池"
-    echo "3. 设置是否自动重应用 nftables"
-    echo "4. 设置是否自动同步 PBR"
-    echo "5. 设置 relay 是否允许自动重启"
-    echo "6. 兼容旧版 DNS 更新配置"
+    echo "2. 设置辅助公网地址检测 URL 池"
+    echo "3. 设置 DNS 解析器列表"
+    echo "4. 设置 DNS 解析策略"
+    echo "5. 查看最近 DNS 分歧"
+    echo "6. 设置是否自动重应用 nftables"
+    echo "7. 设置是否自动同步 PBR"
+    echo "8. 设置 relay 是否允许自动重启"
+    echo "9. 兼容旧版 DNS 更新配置"
     echo "0. 返回"
     choice="$(prompt_menu_choice "请选择：")"
     case "$choice" in
       1) run_menu_action_pause ddns_set_interval ;;
       2) run_menu_action_pause ddns_set_public_ip_urls ;;
-      3) run_menu_action_pause ddns_toggle_auto_apply ;;
-      4) run_menu_action_pause ddns_toggle_auto_sync_pbr ;;
-      5) run_menu_action_pause ddns_toggle_auto_restart_relay ;;
-      6) run_menu_action_pause ddns_legacy_dns_update_menu ;;
+      3) run_menu_action_pause ddns_set_dns_resolvers ;;
+      4) run_menu_action_pause ddns_set_dns_strategy ;;
+      5) run_menu_action_pause ddns_show_recent_dns_split ;;
+      6) run_menu_action_pause ddns_toggle_auto_apply ;;
+      7) run_menu_action_pause ddns_toggle_auto_sync_pbr ;;
+      8) run_menu_action_pause ddns_toggle_auto_restart_relay ;;
+      9) run_menu_action_pause ddns_legacy_dns_update_menu ;;
       0) return 0 ;;
       "") menu_input_required ;;
       *) menu_invalid_choice ;;
@@ -6461,9 +6863,9 @@ ddns_menu() {
 
 print_ddns_menu_options() {
   print_menu_header "DDNS"
-  echo "1. 开启 / 关闭全局 IP 变化检测"
+  echo "1. 开启 / 关闭域名解析变化检测"
   echo "2. 立即检测并刷新"
-  echo "3. 查看 DDNS / IP 变化状态"
+  echo "3. 查看 DDNS / 域名解析状态"
   echo "4. 查看 DDNS 日志"
   echo "5. 高级设置"
   echo "0. 返回"
@@ -7204,7 +7606,11 @@ pbr_refresh_dynamic_rules() {
       if is_ipv4 "$source_host"; then
         new_cidr="${source_host}/32"
       else
-        current_ip="$(resolve_ipv4_first "$source_host" 2>/dev/null || true)"
+        if resolve_domain_ipv4_multi "$source_host"; then
+          current_ip="$RESOLVE_SELECTED_IP"
+        else
+          current_ip=""
+        fi
         if [[ -z "$current_ip" ]]; then
           warn "PBR 来源转发 ${source_name} 的域名解析失败，继续使用当前规则：${cidr}"
           printf '%s\n' "$line" >>"$tmp"
@@ -7335,7 +7741,11 @@ pbr_add_from_forward() {
   row="$(forwards_rows | awk -F'\t' -v n="$name" '$1==n {print; exit}')"
   [[ -n "$row" ]] || { warn "转发目标不存在：${name}"; return 0; }
   target_host="$(awk -F'\t' '{print $3}' <<<"$row")"
-  target_ip="$(resolve_ipv4_first "$target_host" 2>/dev/null || true)"
+  if resolve_domain_ipv4_multi "$target_host"; then
+    target_ip="$RESOLVE_SELECTED_IP"
+  else
+    target_ip=""
+  fi
   if [[ -z "$target_ip" ]]; then
     warn "无法解析转发目标 ${name}：${target_host}"
     return 0
@@ -7620,7 +8030,11 @@ pbr_domain_sync() {
       PBR_DOMAIN_SYNC_FAILED_NAMES="${PBR_DOMAIN_SYNC_FAILED_NAMES:+${PBR_DOMAIN_SYNC_FAILED_NAMES},}${name}"
       continue
     fi
-    new_ip="$(resolve_ipv4_first "$host" 2>/dev/null || true)"
+    if resolve_domain_ipv4_multi "$host"; then
+      new_ip="$RESOLVE_SELECTED_IP"
+    else
+      new_ip=""
+    fi
     if [[ -z "$new_ip" ]]; then
       failed=$((failed + 1))
       PBR_DOMAIN_SYNC_FAILED_NAMES="${PBR_DOMAIN_SYNC_FAILED_NAMES:+${PBR_DOMAIN_SYNC_FAILED_NAMES},}${name}"
@@ -7686,7 +8100,11 @@ pbr_domain_add() {
   enabled="$(prompt_value "enabled true/false" "true")"
   [[ "$enabled" == "true" || "$enabled" == "false" ]] || { warn "enabled 必须是 true 或 false。"; return 0; }
   comment="$(prompt_value "备注" "${name}-ddns-pbr")"
-  resolved="$(resolve_ipv4_first "$host" 2>/dev/null || true)"
+    if resolve_domain_ipv4_multi "$host"; then
+      resolved="$RESOLVE_SELECTED_IP"
+    else
+      resolved=""
+    fi
   [[ -n "$resolved" ]] || { warn "域名暂未解析成功，未写入域名 PBR：${host}"; return 0; }
   row="${name}"$'\t'"${host}"$'\t'"${route_table}"$'\t'"${enabled}"$'\t'"${comment}"
   confirm_summary "添加域名 PBR 摘要" "name=${name}\nhost=${host}\nresolved=${resolved}\nroute_table=${route_table}\nenabled=${enabled}\nsource=pbr-domain:${name} ${host}" || return 0
@@ -9420,8 +9838,14 @@ ddns_public_entry_change_label() {
 }
 
 status_ddns_compact_block() {
+  local split strategy
+  split="$(env_file_get "$DDNS_STATUS_FILE" LAST_DDNS_DNS_SPLIT_DETECTED)"
+  strategy="$(env_file_get "$DDNS_STATUS_FILE" LAST_DDNS_DNS_STRATEGY)"
+  [[ -n "$strategy" ]] || strategy="$(ddns_config_value DNS_RESOLVE_STRATEGY "$DNS_RESOLVE_STRATEGY_DEFAULT")"
   echo "DDNS:"
-  echo "- 全局 IP 变化检测: $(ddns_global_state_label)"
+  echo "- 域名解析变化检测: $(ddns_global_state_label)"
+  echo "- DNS 解析策略: ${strategy}"
+  echo "- DNS 传播状态: $([[ "${split,,}" == "true" ]] && printf '不一致' || printf '一致')"
   echo "- relay restart needed: $(bool_yes_no "$(env_file_get "$DDNS_STATUS_FILE" LAST_DDNS_RELAY_RESTART_NEEDED)")"
 }
 
@@ -9436,7 +9860,11 @@ report_local_entry_ddns_status() {
     report INFO "本机公网入口地址不是域名，跳过 DDNS 一致性检查：${host}"
     return 0
   fi
-  resolved="$(resolve_ipv4_first "$host" 2>/dev/null || true)"
+  if resolve_domain_ipv4_multi "$host"; then
+    resolved="$RESOLVE_SELECTED_IP"
+  else
+    resolved=""
+  fi
   public_ip="$(detect_public_ipv4 2>/dev/null || true)"
   if [[ -z "$resolved" ]]; then
     report WARN "本机公网入口域名解析失败：${host}"
@@ -9468,7 +9896,11 @@ status_local_entry_ddns_line() {
     printf 'skipped'
     return 0
   fi
-  resolved="$(resolve_ipv4_first "$host" 2>/dev/null || true)"
+  if resolve_domain_ipv4_multi "$host"; then
+    resolved="$RESOLVE_SELECTED_IP"
+  else
+    resolved=""
+  fi
   public_ip="$(detect_public_ipv4 2>/dev/null || true)"
   if [[ -z "$resolved" || -z "$public_ip" ]]; then
     status_mark_result warn
@@ -9526,7 +9958,7 @@ report_b_ddns_entry_monitor_status() {
   timer_state="$(ddns_timer_state)"
   restart_needed="$(env_file_get "$DDNS_STATUS_FILE" LAST_DDNS_RELAY_RESTART_NEEDED)"
   if (( entry_count > 0 )) && [[ "$timer_state" != "active" ]]; then
-    report INFO "检测到公网入口域名，建议启用全局 IP 变化检测：lq ddns enable"
+    report INFO "检测到公网入口域名，建议启用域名解析变化检测：lq ddns enable"
   fi
   if [[ "${restart_needed:-false}" == "true" ]]; then
     report WARN "公网入口域名解析已变化，relay 可能需要重启。"
@@ -9535,7 +9967,7 @@ report_b_ddns_entry_monitor_status() {
 }
 
 report_ddns_global_state() {
-  local public_ip public_source result forward_failed entry_failed pbr_failed restart_needed update_dns
+  local public_ip public_source result forward_failed entry_failed pbr_failed restart_needed update_dns dns_split dns_domain dns_selected
   public_ip="$(env_file_get "$DDNS_STATUS_FILE" LAST_DDNS_PUBLIC_IP)"
   public_source="$(env_file_get "$DDNS_STATUS_FILE" LAST_DDNS_PUBLIC_IP_SOURCE)"
   result="$(env_file_get "$DDNS_STATUS_FILE" LAST_DDNS_RESULT)"
@@ -9544,18 +9976,25 @@ report_ddns_global_state() {
   pbr_failed="$(env_file_get "$DDNS_STATUS_FILE" LAST_DDNS_PBR_FAILED)"
   restart_needed="$(env_file_get "$DDNS_STATUS_FILE" LAST_DDNS_RELAY_RESTART_NEEDED)"
   update_dns="$(ddns_config_value DDNS_UPDATE_DNS_RECORD "$DDNS_UPDATE_DNS_RECORD_DEFAULT")"
+  dns_split="$(env_file_get "$DDNS_STATUS_FILE" LAST_DDNS_DNS_SPLIT_DETECTED)"
+  dns_domain="$(env_file_get "$DDNS_STATUS_FILE" LAST_DDNS_DNS_SPLIT_DOMAIN)"
+  dns_selected="$(env_file_get "$DDNS_STATUS_FILE" LAST_DDNS_DNS_SELECTED_IP)"
   if [[ -n "$public_ip" ]]; then
-    report OK "公网 IP 检测最近成功：${public_ip} (${public_source:-unknown})"
+    report OK "辅助公网 IP 检测最近成功：${public_ip} (${public_source:-unknown})"
   elif [[ -n "$result" ]]; then
-    report WARN "公网 IP 检测最近没有可用结果，请检查网络或自定义 PUBLIC_IP_CHECK_URLS。"
+    report WARN "辅助公网 IP 检测最近没有可用结果，请检查网络或自定义 PUBLIC_IP_CHECK_URLS。"
   else
-    report INFO "尚无公网 IP 检测缓存，可执行：lq ddns run"
+    report INFO "尚无辅助公网 IP 检测缓存；域名解析变化检测仍可执行：lq ddns run"
   fi
   if [[ -n "$forward_failed$entry_failed$pbr_failed" ]]; then
     report WARN "存在域名解析失败，请检查 DNS。"
     [[ -n "$forward_failed" ]] && report INFO "后端域名失败：${forward_failed}"
     [[ -n "$entry_failed" ]] && report INFO "公网入口域名失败：${entry_failed}"
     [[ -n "$pbr_failed" ]] && report INFO "PBR 域名失败：${pbr_failed}"
+  fi
+  if [[ "${dns_split,,}" == "true" ]]; then
+    report WARN "检测到 DNS 传播不一致：${dns_domain:-未知域名}，当前采用 ${dns_selected:-未知 IP}。"
+    report INFO "可调整 DNS_RESOLVE_SERVERS 或 DNS_RESOLVE_STRATEGY。"
   fi
   if [[ "${restart_needed:-false}" == "true" ]]; then
     report WARN "relay restart needed: yes，请在维护窗口重启 relay。"
@@ -9612,7 +10051,11 @@ report_pbr_domain_ddns_status() {
       report WARN "域名 PBR ${name} host 不是域名：${host}"
       continue
     fi
-    current_ip="$(resolve_ipv4_first "$host" 2>/dev/null || true)"
+    if resolve_domain_ipv4_multi "$host"; then
+      current_ip="$RESOLVE_SELECTED_IP"
+    else
+      current_ip=""
+    fi
     cached_ip="$(last_resolved_ip_for_pbr_domain "$name")"
     if [[ -z "$current_ip" ]]; then
       report WARN "域名 PBR ${name} 解析失败：${host}"
@@ -9747,7 +10190,10 @@ status_overview_relay() {
   echo "DDNS: $(ddns_lts_line)"
   if [[ -n "$ddns_last_time" ]]; then
     echo "最近检测: ${ddns_last_time} / $(status_result_display "$ddns_last_result")"
-    echo "公网 IP 检测源: $(env_file_get "$DDNS_STATUS_FILE" LAST_DDNS_PUBLIC_IP_SOURCE)"
+    echo "辅助公网 IP 检测源: $(env_file_get "$DDNS_STATUS_FILE" LAST_DDNS_PUBLIC_IP_SOURCE)"
+    echo "DNS 解析策略: $(env_file_get "$DDNS_STATUS_FILE" LAST_DDNS_DNS_STRATEGY)"
+    echo "DNS 解析器: $(env_file_get "$DDNS_STATUS_FILE" LAST_DDNS_DNS_SERVERS)"
+    echo "DNS 传播状态: $([[ "$(env_file_get "$DDNS_STATUS_FILE" LAST_DDNS_DNS_SPLIT_DETECTED)" == "true" ]] && printf '不一致' || printf '一致')"
     echo "后端域名检测: $(status_ddns_forward_summary)"
     echo "公网入口域名检测: $(status_ddns_entry_summary)"
     echo "PBR 域名检测: $(status_ddns_pbr_summary)"
@@ -9761,9 +10207,9 @@ status_overview_relay() {
   fi
   status_ddns_compact_block
   if (( ddns_entry_count > 0 )) && [[ "$ddns_timer" != "active" ]]; then
-    echo "[INFO] 检测到公网入口域名，建议启用全局 IP 变化检测：lq ddns enable"
+    echo "[INFO] 检测到公网入口域名，建议启用域名解析变化检测：lq ddns enable"
   elif (( (ddns_forward_count + ddns_entry_count + ddns_pbr_count) > 0 )) && [[ "$ddns_timer" != "active" ]]; then
-    echo "[INFO] 检测到域名对象，可在 DDNS 菜单中启用全局 IP 变化检测。"
+    echo "[INFO] 检测到域名对象，可在 DDNS 菜单中启用域名解析变化检测。"
   fi
   if [[ "$(env_file_get "$DDNS_STATUS_FILE" LAST_DDNS_RELAY_RESTART_NEEDED)" == "true" ]]; then
     echo "[WARN] 公网入口域名解析已变化，relay 可能需要重启。"
@@ -11706,7 +12152,7 @@ entry_host_menu() {
     echo "1. 粘贴接入码并部署入口"
     echo "2. 配置入口端口池"
     echo "3. 查看 A 端状态"
-    echo "4. DDNS / IP 变化检测"
+    echo "4. DDNS / 域名解析变化"
     echo "0. 返回"
     choice="$(prompt_menu_choice "请选择：")"
     case "$choice" in

@@ -5,7 +5,8 @@ set -Eeuo pipefail
 ROOT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
-TMP_DIR="$(mktemp -d)"
+mkdir -p "$ROOT_DIR/.tmp"
+TMP_DIR="$(TMPDIR="$ROOT_DIR/.tmp" mktemp -d)"
 trap 'rm -rf "$TMP_DIR"' EXIT
 
 export LEIKWAN_STATE_DIR="${TMP_DIR}/state"
@@ -35,7 +36,7 @@ DDNS_RELAY_RESTART_NEEDED=false
 DDNS_RELAY_RESTARTED=false
 
 summary="$(ddns_print_summary ok)"
-grep -q "全局 IP 变化检测摘要" <<<"$summary"
+grep -q "域名解析变化检测摘要" <<<"$summary"
 grep -q "后端转发：" <<<"$summary"
 grep -q -- "- 检查 4" <<<"$summary"
 grep -q "公网入口：" <<<"$summary"

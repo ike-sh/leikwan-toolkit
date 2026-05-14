@@ -68,11 +68,11 @@ lq status
 
 ## DDNS
 
-DDNS 用户路径是“全局 IP 变化检测与自动刷新”：
+DDNS 用户路径是“域名解析变化自动刷新”：
 
 - Toolkit 默认不修改 DNS 服务商记录。
 - 域名可以由路由器、服务商客户端、Cloudflare 或外部脚本维护。
-- Toolkit 检测 entries / forwards / PBR 域名变化后刷新本地转发、resolved 缓存和 PBR。
+- Toolkit 在 B 侧检测 entries / forwards / PBR 域名变化后刷新本地转发、resolved 缓存和 PBR。
 - 公网入口域名变化时默认只标记 `relay restart needed`，不会自动重启 relay。
 
 普通用户不需要配置 DNS provider token。

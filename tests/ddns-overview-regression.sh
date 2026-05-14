@@ -53,7 +53,14 @@ LAST_DDNS_RELAY_RESTART_NEEDED=true
 LAST_DDNS_NFT_APPLIED=false
 LAST_DDNS_PBR_APPLIED=false
 LAST_DDNS_RELAY_RESTARTED=false
-LAST_DDNS_VERSION=1.4.1
+LAST_DDNS_DNS_STRATEGY=first-success
+LAST_DDNS_DNS_SERVERS=1.1.1.1,8.8.8.8,223.5.5.5,119.29.29.29
+LAST_DDNS_DNS_SPLIT_DETECTED=true
+LAST_DDNS_DNS_SPLIT_DOMAIN=home.example.test
+LAST_DDNS_DNS_SPLIT_RESULTS=1.1.1.1 -> 1.1.1.1;8.8.8.8 -> 1.1.1.1;223.5.5.5 -> 211.158.46.251;system -> 211.158.46.251
+LAST_DDNS_DNS_SELECTED_IP=1.1.1.1
+LAST_DDNS_DNS_SELECTED_SOURCE=1.1.1.1
+LAST_DDNS_VERSION=1.4.2
 EOF
 entry_ddns_write_config true home.example.test custom-url "" "" "" "" 5min last
 cat >"$ENTRY_DDNS_STATUS_FILE" <<'EOF'
@@ -63,20 +70,28 @@ LAST_ENTRY_DDNS_HOST=home.example.test
 LAST_ENTRY_DDNS_PUBLIC_IP=198.51.100.10
 LAST_ENTRY_DDNS_RESOLVED_IP=198.51.100.10
 LAST_ENTRY_DDNS_CHANGED=false
-LAST_ENTRY_DDNS_VERSION=1.4.1
+LAST_ENTRY_DDNS_VERSION=1.4.2
 EOF
 
 overview="$(ddns_overview)"
-grep -q "DDNS / IP 变化检测状态" <<<"$overview"
-grep -q "本机公网 IP" <<<"$overview"
+grep -q "DDNS / 域名解析状态" <<<"$overview"
+grep -q "辅助公网 IP" <<<"$overview"
+grep -q "辅助公网 IP 检测源: https://api.ipify.org" <<<"$overview"
+grep -q "DNS 解析策略: first-success" <<<"$overview"
+grep -q "DNS 解析器: 1.1.1.1,8.8.8.8,223.5.5.5,119.29.29.29" <<<"$overview"
+grep -q "DNS 传播状态: 不一致" <<<"$overview"
+grep -q "最近 DNS 分歧" <<<"$overview"
+grep -q "当前采用: 1.1.1.1" <<<"$overview"
 grep -q "后端域名: checked 1, changed 0, failed 0" <<<"$overview"
 grep -q "公网入口域名: checked 1, changed 1, failed 0" <<<"$overview"
 grep -q "PBR 域名: checked 1, changed 0, failed 0" <<<"$overview"
 grep -q "relay restart needed: yes" <<<"$overview"
 
 status_out="$(ddns_status)"
-grep -q "DDNS / IP 变化检测状态" <<<"$status_out"
-grep -q "本机公网 IP" <<<"$status_out"
+grep -q "DDNS / 域名解析状态" <<<"$status_out"
+grep -q "辅助公网 IP" <<<"$status_out"
+grep -q "DNS 解析策略" <<<"$status_out"
+grep -q "DNS 传播状态" <<<"$status_out"
 grep -q "后端域名" <<<"$status_out"
 grep -q "公网入口域名" <<<"$status_out"
 grep -q "PBR 域名" <<<"$status_out"

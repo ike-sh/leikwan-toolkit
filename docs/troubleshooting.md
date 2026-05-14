@@ -123,7 +123,7 @@ lq logs doctor
 
 无日志时会友好提示。清理运行日志使用 `lq logs clean`，它不会删除配置、快照或备份。
 
-## DDNS / IP 变化不一致
+## DDNS / 域名解析变化不一致
 
 Leikwan Toolkit 默认不修改 DNS 记录。域名解析应由路由器、服务商客户端、Cloudflare 或外部脚本维护；Toolkit 只检测解析变化并同步本机规则。
 
@@ -134,7 +134,7 @@ lq ddns status
 lq ddns check-consistency
 ```
 
-如果本机公网 IP 检测失败，检查网络或自定义 `PUBLIC_IP_CHECK_URLS`。如果域名解析失败，检查 DNS 或外部 DDNS 客户端。
+如果辅助公网 IP 检测失败，检查网络或自定义 `PUBLIC_IP_CHECK_URLS`。如果域名解析失败，检查 DNS 或外部 DDNS 客户端。
 
 如果显示 `relay restart needed`，说明公网入口域名已经变化，relay 可能需要重启才能重新解析 peer。维护窗口内执行：
 

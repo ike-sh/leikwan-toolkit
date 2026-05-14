@@ -91,12 +91,12 @@ DDNS: OK
 
 存在问题时会输出“建议修复”，优先给出 `lq doctor --auto-fix`、`lq ddns apply-entries` 或 `lq forward apply-relay --auto-fix-route`。
 
-## DDNS / IP 变化检查
+## DDNS / 域名解析变化检查
 
-1.4.1 起，doctor 会按“全局 IP 变化检测”提示 DDNS 状态：
+1.4.2 起，doctor 会按“域名解析变化自动刷新”提示 DDNS 状态：
 
-- 检测到 enabled 公网入口域名但全局检测 timer 未启用时，会提示 `lq ddns enable`。
-- 公网 IP 检测全部失败时，会提示检查网络或自定义 `PUBLIC_IP_CHECK_URLS`。
+- 检测到 enabled 公网入口域名但域名解析变化检测 timer 未启用时，会提示 `lq ddns enable`。
+- 辅助公网 IP 检测全部失败时，会提示检查网络或自定义 `PUBLIC_IP_CHECK_URLS`。
 - 域名解析失败时，会提示检查 DNS。
 - 公网入口域名变化且 relay 尚未重启时，会提示 `relay restart needed`，建议维护窗口处理。
 - 只有显式设置 `DDNS_UPDATE_DNS_RECORD=true` 时，才会提示兼容 DNS 更新 provider/token。

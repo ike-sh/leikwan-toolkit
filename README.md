@@ -1,17 +1,17 @@
 # Leikwan Toolkit
 
-Leikwan Toolkit Shell Core is `1.4.1 LTS`. This repository now keeps only the Shell LTS line: `leikwan-toolkit.sh`, `scripts/bootstrap.sh`, docs, and tests.
+Leikwan Toolkit `1.4.2 LTS` is the Shell LTS line for local TCP/UDP forwarding, EasyTier relay / entry setup, nftables, IPv4 PBR, snapshots, status, doctor, and DDNS domain-resolution refresh.
 
-Leikwan Toolkit is a TCP/UDP forwarding toolkit for a public entry, relay host, and backend target topology. The Shell Core owns the real local behavior: EasyTier, nftables forwarding, global IP change detection, PBR, snapshots, status, doctor, and maintenance.
+当前仓库只维护 Shell LTS：
 
-## Quick Start
+- `leikwan-toolkit.sh`
+- `scripts/bootstrap.sh`
+- `docs/`
+- `tests/`
 
-```bash
-curl -fsSL -o /tmp/lq-bootstrap.sh https://raw.githubusercontent.com/ike-sh/leikwan-toolkit/main/scripts/bootstrap.sh && bash /tmp/lq-bootstrap.sh
-lq init
-```
+历史 `panel/` 实现已迁移到 `edge-tunnel-panel`，本仓库不恢复这些文件。
 
-Common commands:
+## 快速开始
 
 ```bash
 lq init
@@ -21,46 +21,42 @@ lq --doctor
 lq ddns run
 lq ddns status
 lq forward apply-relay --auto-fix-route
-lq update check
 ```
 
-## Shell LTS Scope
+查看版本：
 
-The former `panel/` code has moved to the separate `edge-tunnel-panel` repository and is not part of this Shell LTS line. This repo does not restore panel implementation files.
+```bash
+lq --version
+# leikwan-toolkit 1.4.2 LTS
+```
 
-## 全局 IP 变化检测与自动刷新
+## 域名解析变化自动刷新
 
-Leikwan Toolkit 默认不修改 DNS 服务商记录。你的 DDNS 解析记录可以由路由器、服务商客户端、Cloudflare、Cloudflare Worker、外部 DDNS 客户端或外部脚本维护。
+Leikwan Toolkit 默认不修改 DNS 服务商记录，也不要求配置 DNS provider token。公网入口域名 / IP 可以由路由器、服务商客户端、Cloudflare、外部 DDNS 客户端或外部脚本维护。
 
-Toolkit 只负责检测 IP 和域名解析是否变化：
+Toolkit 在 B 利群主机侧定时解析这些域名，并根据解析结果相对本地缓存是否变化来刷新本地配置：
 
-- 检测本机公网 IP。
-- 检测 `entries.tsv` 中 enabled `public_host` 域名。
-- 检测 `forwards.tsv` 中 enabled `target_host` 域名。
-- 检测 PBR 域名规则。
-- 发现变化后自动刷新本地转发、`resolved.tsv` 缓存和 PBR。
+- `entries.tsv` 中 enabled 公网入口的 `public_host`。
+- `forwards.tsv` 中 enabled 转发目标的 `target_host`。
+- `pbr/domain-routes.tsv` 中 enabled 域名规则。
+- `DDNS_GLOBAL_DOMAINS` 中额外配置的域名。
 
-内置公网 IP 检测 URL 池，国内外服务器都可以直接使用：
+本机公网 IP 检测只作为辅助状态展示，不参与 entries / forwards / PBR 的变化判断。
+
+1.4.2 起，DDNS 域名检测支持多 DNS 解析器，避免只依赖系统 DNS 时漏掉国内外 DNS 传播不一致：
 
 ```text
-https://api.ipify.org
-https://ifconfig.me/ip
-https://ipv4.icanhazip.com
-https://4.ipw.cn
-https://ip.3322.net
-https://myip.ipip.net
+DNS_RESOLVE_SERVERS=1.1.1.1,8.8.8.8,223.5.5.5,119.29.29.29
+DNS_RESOLVE_STRATEGY=first-success
+DNS_RESOLVE_WARN_ON_SPLIT=true
 ```
 
-默认不会自动重启 relay，避免中断业务。公网入口域名解析变化时只标记 `relay restart needed`；需要自动重启时再显式设置：
+默认优先使用 `1.1.1.1` / `8.8.8.8`，再使用国内 DNS。用户可以调整 `DNS_RESOLVE_SERVERS` 顺序，也可以把 `DNS_RESOLVE_STRATEGY` 设置为 `system-first` 或 `majority`。如果解析器返回不同 IP，会记录 WARN，并在状态中显示最近 DNS 分歧。
+
+发现采用结果与本地缓存不同时，Toolkit 会更新 resolved 缓存并自动刷新本地转发 / PBR。公网入口 `public_host` 变化时会标记 `relay restart needed`；默认不会自动重启 relay。需要自动重启时再显式设置：
 
 ```text
 DDNS_AUTO_RESTART_RELAY=true
-```
-
-默认配置位于：
-
-```text
-/etc/leikwan-toolkit/ddns-global.env
 ```
 
 关键默认值：
@@ -73,11 +69,9 @@ DDNS_AUTO_RESTART_RELAY=false
 PUBLIC_IP_CHECK_URLS=
 ```
 
-兼容旧版 DNS 更新能力仍保留给高级用户，但普通路径不需要 DNS provider token。
+## 文档
 
-## Docs
-
-- [DDNS / IP 变化检测](docs/ddns-refresh.md)
+- [DDNS / 域名解析变化](docs/ddns-refresh.md)
 - [CLI](docs/cli.md)
 - [状态输出](docs/status.md)
 - [Doctor](docs/doctor.md)

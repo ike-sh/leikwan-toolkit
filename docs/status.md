@@ -84,14 +84,14 @@ JSON 输出不受简洁模式影响，仍输出结构化摘要。
 
 评分会参考 EasyTier、relay / entry 服务、entries、forwards、PBR、nftables、MSS clamp、DDNS、锁和最近错误。它是巡检提示，不替代 `lq --doctor` 的详细诊断。
 
-## DDNS / IP 变化状态
+## DDNS / 域名解析变化状态
 
-1.4.1 起，`lq status` 将 DDNS 显示为全局 IP 变化检测：
+1.4.2 起，`lq status` 将 DDNS 显示为域名解析变化检测：
 
-- 检测本机公网 IP。
 - 检测后端域名、公网入口域名和 PBR 域名。
 - 发现变化后刷新 resolved 缓存、nftables 和 PBR。
 - 默认不修改 DNS 服务商记录，不要求 DNS provider token。
+- 本机公网 IP 检测只作为辅助状态，不参与域名变化判断。
 
 如果检测到公网入口域名变化但 relay 尚未重启，状态会提示：
 
@@ -104,7 +104,7 @@ JSON 输出不受简洁模式影响，仍输出结构化摘要。
 
 ```text
 DDNS:
-- 全局 IP 变化检测: active / disabled / not configured
+- 域名解析变化检测: active / disabled / not configured
 - relay restart needed: yes / no
 ```
 

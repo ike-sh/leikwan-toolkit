@@ -111,7 +111,7 @@ JSON 只输出状态摘要、计数、健康度评分和 WARN / FAIL 概要，�
 
 ## 兼容 DNS 更新凭据
 
-默认全局 IP 变化检测不会保存 DNS provider token。只有显式启用 `DDNS_UPDATE_DNS_RECORD=true` 并使用兼容入口时，`lq entry ddns setup` 才可能保存 DNS 服务商 token、custom URL 或 custom command 到：
+默认域名解析变化自动刷新不会保存 DNS provider token。只有显式启用 `DDNS_UPDATE_DNS_RECORD=true` 并使用兼容入口时，`lq entry ddns setup` 才可能保存 DNS 服务商 token、custom URL 或 custom command 到：
 
 ```text
 /etc/leikwan-toolkit/entry/ddns.env

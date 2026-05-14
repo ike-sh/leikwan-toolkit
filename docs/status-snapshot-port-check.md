@@ -1,6 +1,6 @@
 ﻿# 状态、快照与端口预检
 
-本文记录状态总览、快照 / 回滚、端口预检，以及 1.4.1 的 DDNS / IP 变化检测状态集成。
+本文记录状态总览、快照 / 回滚、端口预检，以及 1.4.2 的 DDNS / 域名解析变化检测状态集成。
 
 ## 状态总览
 
@@ -28,17 +28,17 @@ lq --status-json
 
 缓存只记录时间、动作、结果和版本，不写 EasyTier secret。
 
-1.4.1 起，状态总览显示全局 IP 变化检测状态：
+1.4.2 起，状态总览显示域名解析变化检测状态：
 
 ```text
 DDNS: enabled, last OK, changed 0, relay restart needed: no
 最近检测: 2026-05-10 04:12:00 / OK
-公网 IP 检测源: https://api.ipify.org
+辅助公网 IP 检测源: https://api.ipify.org
 后端域名检测: OK
 公网入口域名检测: OK
 PBR 域名检测: OK
 DDNS:
-- 全局 IP 变化检测: active
+- 域名解析变化检测: active
 - relay restart needed: no
 最近配置导出: 2026-05-10 06:00:00 / full
 最近配置导入: 无记录

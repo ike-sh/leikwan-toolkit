@@ -85,6 +85,13 @@ entry_ddns_write_config true home.example.test custom-url "$update_url" "" "$sec
 DRY_RUN=1
 detect_public_ipv4() { printf '%s' "198.51.100.10"; }
 resolve_ipv4_first() { printf '%s' "198.51.100.10"; }
+resolve_domain_ipv4_multi() {
+  RESOLVE_SELECTED_IP="198.51.100.10"
+  RESOLVE_SELECTED_SOURCE="test"
+  RESOLVE_ALL_RESULTS="test -> 198.51.100.10"
+  RESOLVE_SPLIT_DETECTED=false
+  return 0
+}
 entry_ddns_run_update() { echo "UPDATE_CALLED"; return 0; }
 same_out="$(entry_ddns_run 2>&1)"
 grep -q "正在检测当前公网 IPv4" <<<"$same_out"
