@@ -20,6 +20,7 @@ source "$ROOT_DIR/leikwan-toolkit.sh"
 
 need_root_unless_dry_run() { return 0; }
 prompt_apply_relay_after_entry_change() { return 0; }
+dnsutils_auto_install() { return 0; }
 
 mkdir -p "$ENTRIES_DIR"
 cat >"$ENTRIES_TSV" <<'EOF'

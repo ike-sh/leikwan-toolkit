@@ -86,7 +86,7 @@ JSON 输出不受简洁模式影响，仍输出结构化摘要。
 
 ## DDNS / 域名解析变化状态
 
-1.4.4 起，`lq status` 将 DDNS 显示为域名解析变化检测：
+1.4.5 起，`lq status` 将 DDNS 显示为域名解析变化检测：
 
 - 检测后端域名、公网入口域名和 PBR 域名。
 - 发现变化后刷新 resolved 缓存、nftables 和 PBR。

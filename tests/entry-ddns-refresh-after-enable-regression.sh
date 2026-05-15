@@ -20,6 +20,7 @@ source "$ROOT_DIR/leikwan-toolkit.sh"
 
 need_root_unless_dry_run() { return 0; }
 prompt_apply_relay_after_entry_change() { echo "[MOCK] relay prompt"; return 0; }
+dnsutils_auto_install() { return 0; }
 detect_public_ipv4() { DDNS_PUBLIC_IP="203.0.113.9"; DDNS_PUBLIC_IP_SOURCE="mock"; printf '%s' "$DDNS_PUBLIC_IP"; }
 resolve_domain_ipv4_multi() {
   RESOLVE_SELECTED_IP="74.48.182.221"

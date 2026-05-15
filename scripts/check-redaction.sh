@@ -4,7 +4,7 @@ set -Eeuo pipefail
 ROOT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
-TARGETS=(leikwan-toolkit.sh scripts/bootstrap.sh scripts/package-release.sh README.md docs)
+TARGETS=(leikwan-toolkit.sh scripts/bootstrap.sh scripts/package-release.sh scripts/build-release.sh README.md docs)
 [[ -f scripts/verify-release.sh ]] && TARGETS+=(scripts/verify-release.sh)
 [[ -d tests ]] && TARGETS+=(tests)
 TOOL_VERSION="$(awk -F= '$1=="TOOL_VERSION" {gsub(/"/, "", $2); print $2; exit}' leikwan-toolkit.sh 2>/dev/null || true)"
@@ -13,6 +13,7 @@ if [[ -n "$TOOL_VERSION" && -d "dist/leikwan-toolkit-${TOOL_VERSION}" ]]; then
     "dist/leikwan-toolkit-${TOOL_VERSION}/leikwan-toolkit.sh"
     "dist/leikwan-toolkit-${TOOL_VERSION}/scripts/bootstrap.sh"
     "dist/leikwan-toolkit-${TOOL_VERSION}/scripts/package-release.sh"
+    "dist/leikwan-toolkit-${TOOL_VERSION}/scripts/build-release.sh"
     "dist/leikwan-toolkit-${TOOL_VERSION}/README.md"
     "dist/leikwan-toolkit-${TOOL_VERSION}/docs"
   )

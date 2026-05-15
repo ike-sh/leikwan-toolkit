@@ -1,6 +1,6 @@
 # doctor 诊断
 
-Leikwan Toolkit 1.4.4 继续保留详细 `doctor`，同时修复历史 FAIL / WARN 污染问题，并新增自动修复常见问题入口。
+Leikwan Toolkit 1.4.5 继续保留详细 `doctor`，同时修复历史 FAIL / WARN 污染问题，并新增自动修复常见问题入口。
 
 ## 常用命令
 
@@ -43,7 +43,7 @@ lq --doctor-auto-fix
 - route table metadata 不一致。
 - relay service 丢失但已有有效 relay network.env。
 - DDNS timer 未启用。
-- 缺少 `dig` 时可安装 `dnsutils`，用于完整多 DNS 解析器检测。
+- 缺少 `dig` 时自动尝试安装 `dnsutils`，用于完整多 DNS 解析器检测。
 - `lq` / `LQ` 快捷命令错误。
 - 配置文件权限错误。
 - stale locks。
@@ -57,11 +57,7 @@ lq --doctor-auto-fix
 
 自动修复会先运行一次简洁 doctor，记录修复前 FAIL / WARN 数量；修复后再运行 doctor，并输出已恢复项与剩余问题。
 
-缺少 `dig` 时，交互模式会询问是否安装 `dnsutils`。非交互模式可使用：
-
-```bash
-LQ_AUTO_FIX_INSTALL_DNSUTILS=true lq doctor --auto-fix
-```
+缺少 `dig` 时会在 root + apt-get 环境下直接尝试安装 `dnsutils`；安装失败不会中断 doctor，会继续按 fallback 能力检查。
 
 ## JSON 摘要
 
@@ -100,13 +96,13 @@ DDNS: OK
 
 ## DDNS / 域名解析变化检查
 
-1.4.4 起，doctor 会按“域名解析变化自动刷新”提示 DDNS 状态：
+1.4.5 起，doctor 会按“域名解析变化自动刷新”提示 DDNS 状态：
 
 - 检测到 enabled 公网入口域名但域名解析变化检测 timer 未启用时，会提示 `lq ddns enable`。
 - DDNS 最近状态中已有成功的辅助公网 IP、检测源和时间时，不会误报“最近没有可用结果”。
 - 最近检测结果为 FAIL，或最近检测没有可用公网 IP 时，会提示检查网络或自定义 `PUBLIC_IP_CHECK_URLS`。
 - 域名解析失败时，会提示检查 DNS。
-- 启用 DDNS 域名解析变化检测但缺少 `dig` 时，会提示安装 `dnsutils`：`apt install -y dnsutils`。
+- 启用 DDNS 域名解析变化检测但缺少 `dig` 时，会先尝试自动安装 `dnsutils`；失败后提示当前使用 fallback。
 - 公网入口域名变化且 relay 尚未重启时，会提示 `relay restart needed`，建议维护窗口处理。
 - 只有显式设置 `DDNS_UPDATE_DNS_RECORD=true` 时，才会提示兼容 DNS 更新 provider/token。
 

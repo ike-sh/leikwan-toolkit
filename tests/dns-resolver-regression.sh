@@ -75,7 +75,7 @@ LAST_DDNS_DNS_SPLIT_DOMAIN=home.example.test
 LAST_DDNS_DNS_SPLIT_RESULTS=${RESOLVE_ALL_RESULTS}
 LAST_DDNS_DNS_SELECTED_IP=${RESOLVE_SELECTED_IP}
 LAST_DDNS_DNS_SELECTED_SOURCE=${RESOLVE_SELECTED_SOURCE}
-LAST_DDNS_VERSION=1.4.4
+LAST_DDNS_VERSION=1.4.5
 EOF
 
 status_out="$(ddns_status)"
@@ -95,6 +95,7 @@ command() {
   fi
   builtin command "$@"
 }
+dnsutils_auto_install() { return 1; }
 getent() {
   case "$1" in
     ahostsv4|ahosts) printf '%s STREAM home.example.test\n' "211.158.46.251" ;;

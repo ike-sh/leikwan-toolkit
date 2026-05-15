@@ -14,6 +14,7 @@ cd "$ROOT_DIR"
 SHELLCHECK_TARGETS=(
   leikwan-toolkit.sh
   scripts/package-release.sh
+  scripts/build-release.sh
   scripts/check-redaction.sh
   scripts/bootstrap.sh
 )
@@ -39,7 +40,7 @@ mkdir -p "$STAGING_DIR"
 cp leikwan-toolkit.sh README.md "$STAGING_DIR/"
 cp -R docs "$STAGING_DIR/docs"
 mkdir -p "$STAGING_DIR/scripts"
-cp scripts/package-release.sh scripts/check-redaction.sh scripts/bootstrap.sh "$STAGING_DIR/scripts/"
+cp scripts/package-release.sh scripts/build-release.sh scripts/check-redaction.sh scripts/bootstrap.sh "$STAGING_DIR/scripts/"
 [[ -f scripts/verify-release.sh ]] && cp scripts/verify-release.sh "$STAGING_DIR/scripts/"
 [[ -d tests ]] && cp -R tests "$STAGING_DIR/tests"
 

@@ -17,6 +17,7 @@ mkdir -p "$LEIKWAN_RUN_DIR"
 
 # shellcheck source=/dev/null
 source "$ROOT_DIR/leikwan-toolkit.sh"
+dnsutils_auto_install() { return 0; }
 
 mkdir -p "$ENTRIES_DIR" "$FORWARDS_DIR" "$PBR_DIR" "$ENTRY_DIR" "$STATUS_DIR"
 cat >"$ENTRIES_TSV" <<'EOF'
@@ -63,7 +64,7 @@ LAST_DDNS_DNS_SELECTED_IP=1.1.1.1
 LAST_DDNS_DNS_SELECTED_SOURCE=1.1.1.1
 LAST_DDNS_ENTRY_RECENT_EVENTS=public3: 1.1.1.1 -> 74.48.182.221
 LAST_DDNS_ENTRY_RECENT_ACTION=已写入缓存 / relay restart needed
-LAST_DDNS_VERSION=1.4.4
+LAST_DDNS_VERSION=1.4.5
 EOF
 entry_ddns_write_config true home.example.test custom-url "" "" "" "" 5min last
 cat >"$ENTRY_DDNS_STATUS_FILE" <<'EOF'
@@ -73,7 +74,7 @@ LAST_ENTRY_DDNS_HOST=home.example.test
 LAST_ENTRY_DDNS_PUBLIC_IP=198.51.100.10
 LAST_ENTRY_DDNS_RESOLVED_IP=198.51.100.10
 LAST_ENTRY_DDNS_CHANGED=false
-LAST_ENTRY_DDNS_VERSION=1.4.4
+LAST_ENTRY_DDNS_VERSION=1.4.5
 EOF
 
 overview="$(ddns_overview)"

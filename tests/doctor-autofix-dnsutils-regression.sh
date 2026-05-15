@@ -45,7 +45,14 @@ install_packages() {
 
 LQ_AUTO_FIX_INSTALL_DNSUTILS=true
 out="$(doctor_auto_fix_dnsutils 2>&1)"
+grep -q "dig 不存在，正在安装 dnsutils 以启用多 DNS 解析器检测" <<<"$out"
 grep -q "\[MOCK\] apt-get install -y dnsutils" <<<"$out"
 grep -q "dnsutils 已安装" <<<"$out"
+bad_msg="建议安装 d""nsutils"
+if grep -q "$bad_msg" <<<"$out"; then
+  echo "FAIL: dnsutils path only suggested install instead of attempting it" >&2
+  echo "$out" >&2
+  exit 1
+fi
 
 echo "[OK] doctor autofix dnsutils regression passed"

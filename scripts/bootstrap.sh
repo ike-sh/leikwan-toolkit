@@ -79,6 +79,8 @@ mirror_url_for() {
 github_url_candidates() {
   local raw_url="$1" mirrors mirror candidate seen_line
   local -a mirror_list=() seen=()
+  seen+=("$raw_url")
+  printf '%s\n' "$raw_url"
   mirrors="${LEIKWAN_GITHUB_MIRRORS:-${LEIKWAN_GITHUB_MIRROR:-}}"
   mirrors="${mirrors//;/,}"
   if [[ -n "$mirrors" ]]; then
@@ -96,28 +98,37 @@ github_url_candidates() {
     seen+=("$candidate")
     printf '%s\n' "$candidate"
   done
-  for seen_line in "${seen[@]}"; do
-    [[ "$seen_line" == "$raw_url" ]] && return 0
-  done
-  printf '%s\n' "$raw_url"
 }
 
 download_with_fallback() {
-  local raw_url="$1" dest_file="$2" candidate tmp
+  local raw_url="$1" dest_file="$2" candidate tmp first=1
   tmp="${dest_file}.tmp.$$"
   rm -f "$tmp"
   while IFS= read -r candidate; do
     [[ -n "$candidate" ]] || continue
-    info "正在尝试下载：${candidate}"
+    if (( first == 1 )); then
+      info "正在尝试下载：${candidate}"
+    else
+      info "正在尝试镜像：${candidate}"
+    fi
     if curl -fL --retry 2 --retry-delay 2 --connect-timeout 15 --max-time 120 -o "$tmp" "$candidate"; then
       mv -f "$tmp" "$dest_file"
-      ok "下载成功：${candidate}"
+      if (( first == 1 )); then
+        ok "下载成功：${candidate}"
+      else
+        ok "镜像下载成功：${candidate}"
+      fi
       return 0
     fi
-    warn "下载失败，尝试下一个地址。"
+    if (( first == 1 )); then
+      warn "GitHub 直连失败，正在自动切换镜像。"
+    else
+      warn "镜像下载失败，尝试下一个地址。"
+    fi
+    first=0
   done < <(github_url_candidates "$raw_url")
   rm -f "$tmp"
-  fail "全部下载地址均失败：${raw_url}"
+  fail "所有镜像失败，无法下载：${raw_url}"
   return 1
 }
 

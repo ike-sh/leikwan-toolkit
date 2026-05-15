@@ -10,10 +10,10 @@ section() {
 }
 
 section "bash syntax"
-bash -n leikwan-toolkit.sh scripts/package-release.sh scripts/check-redaction.sh scripts/bootstrap.sh
+bash -n leikwan-toolkit.sh scripts/package-release.sh scripts/build-release.sh scripts/check-redaction.sh scripts/bootstrap.sh
 
 section "shellcheck"
-shellcheck leikwan-toolkit.sh scripts/package-release.sh scripts/check-redaction.sh scripts/bootstrap.sh
+shellcheck leikwan-toolkit.sh scripts/package-release.sh scripts/build-release.sh scripts/check-redaction.sh scripts/bootstrap.sh
 
 section "git diff --check"
 git diff --check

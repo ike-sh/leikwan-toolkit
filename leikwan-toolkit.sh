@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-TOOL_VERSION="1.4.4"
+TOOL_VERSION="1.4.5"
 RELEASE_CHANNEL="LTS"
 PROJECT_NAME="leikwan-toolkit"
 PROJECT_TITLE="利群快速组网工具"
@@ -55,6 +55,13 @@ DDNS_DNS_SPLIT_SELECTED_IP=""
 DDNS_DNS_SPLIT_SELECTED_SOURCE=""
 DDNS_ENTRY_RECENT_EVENTS=""
 DDNS_ENTRY_RECENT_ACTION=""
+DDNS_FORWARD_RECENT_EVENTS=""
+DDNS_FORWARD_RECENT_ACTION=""
+DDNS_PBR_RECENT_EVENTS=""
+DDNS_PBR_RECENT_ACTION=""
+DDNS_RELAY_RESTARTED_AT=""
+DDNS_RELAY_RESTART_SKIPPED_COOLDOWN=false
+DDNS_DNSUTILS_INSTALL_ATTEMPTED=false
 
 LOG_FILE="${LEIKWAN_LOG_FILE:-/var/log/leikwan-toolkit.log}"
 STATE_DIR="${LEIKWAN_STATE_DIR:-/etc/leikwan-toolkit}"
@@ -166,6 +173,8 @@ DDNS_GLOBAL_ENABLED_DEFAULT="false"
 DDNS_GLOBAL_INTERVAL_DEFAULT="5min"
 DDNS_AUTO_SYNC_PBR_DEFAULT="true"
 DDNS_AUTO_RESTART_RELAY_DEFAULT="false"
+DDNS_RESTART_RELAY_COOLDOWN_DEFAULT="300"
+DDNS_CHANGE_CONFIRM_COUNT_DEFAULT="1"
 DDNS_UPDATE_DNS_RECORD_DEFAULT="false"
 PUBLIC_IP_CHECK_URLS_DEFAULT="https://api.ipify.org,https://ifconfig.me/ip,https://ipv4.icanhazip.com,https://4.ipw.cn,https://ip.3322.net,https://myip.ipip.net"
 DNS_RESOLVE_SERVERS_DEFAULT="1.1.1.1,8.8.8.8,223.5.5.5,119.29.29.29"
@@ -716,9 +725,46 @@ write_file() {
     return 0
   fi
   backup_file "$path"
-  install -m "$mode" "$tmp" "$path"
+  if ! install -m "$mode" "$tmp" "$path"; then
+    rm -f "$tmp"
+    return 1
+  fi
   rm -f "$tmp"
   ok "已写入 ${path}"
+}
+
+write_file_from_path() {
+  local path="$1" source="$2" mode="${3:-600}" tmp dir
+  if (( DRY_RUN == 1 )); then
+    echo
+    echo "${BOLD}[DRY-RUN] ${path}${RESET}"
+    cat "$source" 2>/dev/null || true
+    return 0
+  fi
+  dir="$(dirname "$path")"
+  mkdir -p "$dir"
+  tmp="$(mktemp "${dir}/.tmp.$(basename "$path").XXXXXX")"
+  if ! cp "$source" "$tmp"; then
+    rm -f "$tmp"
+    return 1
+  fi
+  if [[ -f "$path" ]] && cmp -s "$tmp" "$path"; then
+    rm -f "$tmp"
+    return 0
+  fi
+  backup_file "$path"
+  if ! install -m "$mode" "$tmp" "$path"; then
+    rm -f "$tmp"
+    return 1
+  fi
+  rm -f "$tmp"
+  ok "已写入 ${path}"
+}
+
+make_state_tmp() {
+  local dir="$1" prefix="${2:-tmp}"
+  mkdir -p "$dir"
+  mktemp "${dir}/.tmp.${prefix}.XXXXXX"
 }
 
 confirm_summary() {
@@ -913,6 +959,10 @@ install_packages() {
     missing+=("$pkg")
   done
   ((${#missing[@]} > 0)) || return 0
+  if ! command -v apt-get >/dev/null 2>&1; then
+    warn "未找到 apt-get，无法自动安装依赖：${missing[*]}"
+    return 1
+  fi
   ensure_base_dirs
   export DEBIAN_FRONTEND=noninteractive
   if (( DEPS_APT_UPDATED == 0 )); then
@@ -953,22 +1003,52 @@ doctor_should_offer_dnsutils() {
 
 doctor_auto_fix_dnsutils() {
   command -v dig >/dev/null 2>&1 && return 0
-  if [[ "${LQ_AUTO_FIX_INSTALL_DNSUTILS:-false}" =~ ^([Tt][Rr][Uu][Ee]|[Yy][Ee][Ss]|1|[Yy])$ ]]; then
-    :
-  elif is_interactive; then
-    prompt_yes_no "检测到 dig 缺失，是否安装 dnsutils 以启用多 DNS 解析器检测？" "Y" || {
-      echo "- 已跳过 dnsutils 安装"
+  dnsutils_auto_install "doctor" "true" "plain" || true
+}
+
+dnsutils_emit_line() {
+  local emitter="$1" level="$2" message="$3"
+  case "$emitter" in
+    ddns)
+      ddns_emit "$level" "$message"
+      ;;
+    plain)
+      case "$level" in
+        OK) ok "$message" ;;
+        WARN) warn "$message" ;;
+        FAIL) fail "$message" ;;
+        *) info "$message" ;;
+      esac
+      ;;
+    *)
+      case "$level" in
+        OK) ok "$message" ;;
+        WARN) warn "$message" ;;
+        FAIL) fail "$message" ;;
+        *) info "$message" ;;
+      esac
+      ;;
+  esac
+}
+
+dnsutils_auto_install() {
+  local _context="${1:-ddns}" force="${2:-false}" emitter="${3:-ddns}"
+  command -v dig >/dev/null 2>&1 && return 0
+  if [[ "${DDNS_DNSUTILS_INSTALL_ATTEMPTED:-false}" == "true" && "$force" != "true" ]]; then
+    return 1
+  fi
+  DDNS_DNSUTILS_INSTALL_ATTEMPTED=true
+  if [[ "$force" == "true" ]] || { [[ ${EUID:-$(id -u)} -eq 0 ]] && command -v apt-get >/dev/null 2>&1; }; then
+    dnsutils_emit_line "$emitter" WARN "dig 不存在，正在安装 dnsutils 以启用多 DNS 解析器检测..."
+    if install_packages dnsutils; then
+      dnsutils_emit_line "$emitter" OK "dnsutils 已安装。"
       return 0
-    }
-  else
-    echo "- dig 缺失；如需非交互安装 dnsutils，请设置 LQ_AUTO_FIX_INSTALL_DNSUTILS=true"
-    return 0
+    fi
+    dnsutils_emit_line "$emitter" WARN "dnsutils 安装失败，将使用 nslookup / host / getent fallback。"
+    return 1
   fi
-  if install_packages dnsutils; then
-    echo "- dnsutils 已安装"
-  else
-    warn "dnsutils 安装失败；多 DNS 解析器检测能力仍受限。"
-  fi
+  dnsutils_emit_line "$emitter" WARN "dig 不存在，无法自动安装 dnsutils（需要 root + apt-get），将使用 nslookup / host / getent fallback。"
+  return 1
 }
 
 extract_first_ipv4() {
@@ -1512,6 +1592,9 @@ resolve_domain_ipv4_multi() {
     RESOLVE_ALL_RESULTS="literal -> ${host}"
     return 0
   fi
+  if ! command -v dig >/dev/null 2>&1; then
+    dnsutils_auto_install "ddns-run" "false" "ddns" || true
+  fi
   if ! command -v dig >/dev/null 2>&1 && [[ "${DDNS_DNS_DIG_WARNED:-false}" != "true" ]]; then
     DDNS_DNS_DIG_WARNED=true
     ddns_emit WARN "dig 不存在，多 DNS 解析器检测能力受限，将尝试 fallback。"
@@ -1665,13 +1748,35 @@ easytier_api_asset_url() {
     *) return 1 ;;
   esac
   tmp="$(mktemp)"
-  dl_info "正在获取 EasyTier release 信息：${api}"
-  if ! curl -fsSL --connect-timeout 10 --max-time 30 -H 'Accept: application/vnd.github+json' -o "$tmp" "$api"; then
+  local candidate first=1 fetched=0
+  while IFS= read -r candidate; do
+    [[ -n "$candidate" ]] || continue
+    if (( first == 1 )); then
+      dl_info "正在获取 EasyTier release 信息：${candidate}"
+    else
+      dl_info "正在尝试镜像：${candidate}"
+    fi
+    if curl -fsSL --connect-timeout 10 --max-time 30 -H 'Accept: application/vnd.github+json' -o "$tmp" "$candidate"; then
+      if (( first == 1 )); then
+        dl_ok "已获取 release 信息。"
+      else
+        dl_ok "镜像下载成功：${candidate}"
+      fi
+      fetched=1
+      break
+    fi
+    if (( first == 1 )); then
+      dl_warn "GitHub 直连失败，正在自动切换镜像。"
+    else
+      dl_warn "镜像下载失败，尝试下一个地址。"
+    fi
+    first=0
+  done < <(github_url_candidates "$api")
+  if (( fetched == 0 )); then
     dl_warn "无法获取 GitHub release metadata，将使用内置候选 URL。"
     rm -f "$tmp"
     return 1
   fi
-  dl_ok "已获取 release 信息。"
   if ! result="$(jq -r --arg re "$re" '.assets[]? | select(.name | test($re; "i")) | .browser_download_url' "$tmp" | head -n 1)"; then
     rm -f "$tmp"
     return 1
@@ -1720,6 +1825,8 @@ mirror_url_for() {
 github_url_candidates() {
   local raw_url="$1" mirrors mirror candidate seen_line
   local -a mirror_list=() seen=()
+  seen+=("$raw_url")
+  printf '%s\n' "$raw_url"
   mirrors="${LEIKWAN_GITHUB_MIRRORS:-${LEIKWAN_GITHUB_MIRROR:-}}"
   mirrors="${mirrors//;/,}"
   if [[ -n "$mirrors" ]]; then
@@ -1737,29 +1844,38 @@ github_url_candidates() {
     seen+=("$candidate")
     printf '%s\n' "$candidate"
   done
-  for seen_line in "${seen[@]}"; do
-    [[ "$seen_line" == "$raw_url" ]] && return 0
-  done
-  printf '%s\n' "$raw_url"
 }
 
 download_with_fallback() {
-  local raw_url="$1" dest_file="$2" candidate tmp timeout
+  local raw_url="$1" dest_file="$2" candidate tmp timeout first=1
   timeout="${LEIKWAN_DOWNLOAD_TIMEOUT:-15}"
   tmp="${dest_file}.tmp.$$"
   rm -f "$tmp"
   while IFS= read -r candidate; do
     [[ -n "$candidate" ]] || continue
-    dl_info "正在尝试下载：${candidate}"
+    if (( first == 1 )); then
+      dl_info "正在尝试下载：${candidate}"
+    else
+      dl_info "正在尝试镜像：${candidate}"
+    fi
     if curl -fL --retry 1 --connect-timeout "$timeout" --max-time "$timeout" -o "$tmp" "$candidate"; then
       mv -f "$tmp" "$dest_file"
-      dl_ok "下载成功：${candidate}"
+      if (( first == 1 )); then
+        dl_ok "下载成功：${candidate}"
+      else
+        dl_ok "镜像下载成功：${candidate}"
+      fi
       return 0
     fi
-    dl_warn "下载失败，尝试下一个地址。"
+    if (( first == 1 )); then
+      dl_warn "GitHub 直连失败，正在自动切换镜像。"
+    else
+      dl_warn "镜像下载失败，尝试下一个地址。"
+    fi
+    first=0
   done < <(github_url_candidates "$raw_url")
   rm -f "$tmp"
-  dl_warn "全部下载地址均失败：${raw_url}"
+  dl_warn "所有镜像失败，无法下载：${raw_url}"
   return 1
 }
 
@@ -1800,11 +1916,34 @@ version_gt() {
 }
 
 update_latest_release() {
-  local api tmp tag version effective
+  local api tmp tag version effective candidate first fetched
   command -v curl >/dev/null 2>&1 || { fail "缺少 curl，无法检查 GitHub Release。"; return 1; }
   api="https://api.github.com/repos/${UPDATE_REPO}/releases/latest"
   tmp="$(mktemp)"
-  if curl -fsSL --connect-timeout 10 --max-time 30 -H 'Accept: application/vnd.github+json' -o "$tmp" "$api"; then
+  first=1
+  fetched=0
+  while IFS= read -r candidate; do
+    [[ -n "$candidate" ]] || continue
+    if (( first == 1 )); then
+      info "正在查询 GitHub Release：${candidate}"
+    else
+      info "正在尝试镜像：${candidate}"
+    fi
+    if curl -fsSL --connect-timeout 10 --max-time 30 -H 'Accept: application/vnd.github+json' -o "$tmp" "$candidate"; then
+      fetched=1
+      if (( first == 0 )); then
+        ok "镜像下载成功：${candidate}"
+      fi
+      break
+    fi
+    if (( first == 1 )); then
+      warn "GitHub 直连失败，正在自动切换镜像。"
+    else
+      warn "镜像下载失败，尝试下一个地址。"
+    fi
+    first=0
+  done < <(github_url_candidates "$api")
+  if (( fetched == 1 )); then
     if command -v jq >/dev/null 2>&1; then
       tag="$(jq -r '.tag_name // empty' "$tmp" 2>/dev/null || true)"
     else
@@ -1813,7 +1952,18 @@ update_latest_release() {
   fi
   rm -f "$tmp"
   if [[ -z "${tag:-}" ]]; then
-    effective="$(curl -fsSLI --connect-timeout 10 --max-time 30 -o /dev/null -w '%{url_effective}' "https://github.com/${UPDATE_REPO}/releases/latest" 2>/dev/null || true)"
+    first=1
+    while IFS= read -r candidate; do
+      [[ -n "$candidate" ]] || continue
+      effective="$(curl -fsSLI --connect-timeout 10 --max-time 30 -o /dev/null -w '%{url_effective}' "$candidate" 2>/dev/null || true)"
+      [[ -n "$effective" ]] && break
+      if (( first == 1 )); then
+        warn "GitHub 直连失败，正在自动切换镜像。"
+      else
+        warn "镜像下载失败，尝试下一个地址。"
+      fi
+      first=0
+    done < <(github_url_candidates "https://github.com/${UPDATE_REPO}/releases/latest")
     tag="${effective##*/}"
   fi
   version="$(normalize_version "${tag:-}" 2>/dev/null || true)"
@@ -1837,7 +1987,7 @@ update_download_asset() {
     ok "下载成功：${raw_url}"
     return 0
   fi
-  warn "GitHub 直连超时，正在自动切换镜像。"
+  warn "GitHub 直连失败，正在自动切换镜像。"
   while IFS= read -r candidate; do
     [[ -n "$candidate" && "$candidate" != "$raw_url" ]] || continue
     for seen_line in "${seen[@]}"; do
@@ -1847,13 +1997,13 @@ update_download_asset() {
     info "正在尝试镜像：${candidate}"
     if curl -fL --retry 1 --connect-timeout 15 --max-time 120 -o "$tmp" "$candidate"; then
       mv -f "$tmp" "$dest_file"
-      ok "镜像下载成功。"
+      ok "镜像下载成功：${candidate}"
       return 0
     fi
     warn "镜像下载失败，尝试下一个地址。"
   done < <(github_url_candidates "$raw_url")
   rm -f "$tmp"
-  fail "无法下载最新 release，请检查网络或设置 LEIKWAN_GITHUB_MIRRORS。"
+  fail "所有镜像失败，无法下载最新 release，请检查网络或设置 LEIKWAN_GITHUB_MIRRORS。"
   return 1
 }
 
@@ -2330,7 +2480,7 @@ archive_integrity_ok() {
 }
 
 download_large_archive_checked() {
-  local raw_url="$1" dest_file="$2" candidate part size_mb integrity_rc
+  local raw_url="$1" dest_file="$2" candidate part size_mb integrity_rc first=1
   part="${dest_file}.part"
   rm -f "$part"
   while IFS= read -r candidate; do
@@ -2344,7 +2494,11 @@ download_large_archive_checked() {
       continue
     fi
     EASYTIER_DOWNLOAD_ATTEMPTS+=("$candidate")
-    dl_info "正在下载 EasyTier：${candidate}"
+    if (( first == 1 )); then
+      dl_info "正在下载 EasyTier：${candidate}"
+    else
+      dl_info "正在尝试镜像：${candidate}"
+    fi
     if curl -fL --connect-timeout 15 --max-time 600 --retry 3 --retry-delay 3 --retry-connrefused -C - -o "$part" "$candidate"; then
       if [[ ! -s "$part" ]]; then
         dl_warn "下载结果为空，继续尝试下一个地址。"
@@ -2370,10 +2524,19 @@ download_large_archive_checked() {
       fi
       mv -f "$part" "$dest_file"
       size_mb="$(du -m "$dest_file" | awk '{print $1}')"
-      dl_ok "EasyTier 下载成功：${dest_file}，大小 ${size_mb} MB"
+      if (( first == 1 )); then
+        dl_ok "EasyTier 下载成功：${dest_file}，大小 ${size_mb} MB"
+      else
+        dl_ok "镜像下载成功：${candidate}"
+      fi
       return 0
     fi
-    dl_warn "下载失败，尝试下一个地址。"
+    if (( first == 1 )); then
+      dl_warn "GitHub 直连失败，正在自动切换镜像。"
+    else
+      dl_warn "镜像下载失败，尝试下一个地址。"
+    fi
+    first=0
   done < <(github_url_candidates "$raw_url")
   rm -f "$part"
   return 1
@@ -4511,10 +4674,15 @@ apply_easytier_entry_services() {
 
 apply_easytier_relay_service() {
   need_root_unless_dry_run
-  local confirm_mode="${1:-ask}" service enabled_count
+  local confirm_mode="${1:-ask}" service enabled_count skip_snapshot=0
+  if [[ "$confirm_mode" == "confirmed-no-snapshot" ]]; then
+    confirm_mode="confirmed"
+    skip_snapshot=1
+  fi
   if machine_looks_like_entry; then
     warn "当前机器看起来是 A 公网入口，不应该启动 relay 服务。"
     warn "如需重启 A，请选择：启动 / 重启 entry 服务。"
+    [[ "$confirm_mode" == "confirmed" ]] && return 1
     prompt_yes_no "是否仍然继续？" "N" || return 0
   fi
   enabled_count="$(enabled_entries_count)"
@@ -4525,7 +4693,9 @@ apply_easytier_relay_service() {
       return 0
     fi
   fi
-  auto_snapshot_or_confirm "restart-relay" || return 0
+  if (( skip_snapshot == 0 )); then
+    auto_snapshot_or_confirm "restart-relay" || return 0
+  fi
   install_easytier_binary
   service="$(render_relay_service)" || return 1
   write_file "$EASYTIER_RELAY_SERVICE" "$service" 644
@@ -4559,6 +4729,10 @@ refresh_entry_ddns_cache_after_entry_change() {
   DDNS_ENTRY_REPORT_BLOCKS=""
   DDNS_ENTRY_RECENT_EVENTS=""
   DDNS_ENTRY_RECENT_ACTION=""
+  DDNS_FORWARD_RECENT_EVENTS=""
+  DDNS_FORWARD_RECENT_ACTION=""
+  DDNS_PBR_RECENT_EVENTS=""
+  DDNS_PBR_RECENT_ACTION=""
   DDNS_ENTRY_CHECKED=0; DDNS_ENTRY_DOMAIN_COUNT=0; DDNS_ENTRY_CHANGED_COUNT=0; DDNS_ENTRY_FAILED_COUNT=0
   DDNS_DNS_SPLIT_DETECTED=false
   DDNS_DNS_INCOMPLETE_DETECTED=false
@@ -4567,6 +4741,7 @@ refresh_entry_ddns_cache_after_entry_change() {
   DDNS_DNS_SPLIT_RESULTS=""
   DDNS_DNS_SPLIT_SELECTED_IP=""
   DDNS_DNS_SPLIT_SELECTED_SOURCE=""
+  dnsutils_auto_install "entry-refresh" "false" "plain" || true
   if ! ddns_ensure_config || ! ddns_refresh_entries_scope; then
     warn "公网入口 ${name} 解析缓存刷新失败，请稍后执行：lq ddns run --scope entries"
     result="warn"
@@ -5641,7 +5816,7 @@ ddns_write_config() {
   local auto_sync_domain_pbr="${8:-$(ddns_config_value DDNS_AUTO_SYNC_DOMAIN_PBR "$DDNS_AUTO_SYNC_DOMAIN_PBR_DEFAULT")}"
   local entry_auto_restart="${9:-$(ddns_config_value DDNS_AUTO_RESTART_RELAY "$(ddns_config_value DDNS_ENTRY_AUTO_RESTART_RELAY "$DDNS_ENTRY_AUTO_RESTART_RELAY_DEFAULT")")}"
   local keep_old="${10:-$(ddns_config_value DDNS_KEEP_OLD_ON_FAIL "$DDNS_KEEP_OLD_ON_FAIL_DEFAULT")}"
-  local public_ip_urls update_dns domains enabled auto_sync_pbr dns_servers dns_strategy dns_warn_on_split
+  local public_ip_urls update_dns domains enabled auto_sync_pbr dns_servers dns_strategy dns_warn_on_split restart_cooldown change_confirm_count
   enabled="$(ddns_config_value DDNS_GLOBAL_ENABLED "$DDNS_GLOBAL_ENABLED_DEFAULT")"
   domains="$(ddns_config_value DDNS_GLOBAL_DOMAINS "")"
   public_ip_urls="$(ddns_config_value PUBLIC_IP_CHECK_URLS "$PUBLIC_IP_CHECK_URLS_DEFAULT")"
@@ -5650,6 +5825,8 @@ ddns_write_config() {
   dns_warn_on_split="$(ddns_config_value DNS_RESOLVE_WARN_ON_SPLIT "$DNS_RESOLVE_WARN_ON_SPLIT_DEFAULT")"
   auto_sync_pbr="$(ddns_config_value DDNS_AUTO_SYNC_PBR "$DDNS_AUTO_SYNC_PBR_DEFAULT")"
   update_dns="$(ddns_config_value DDNS_UPDATE_DNS_RECORD "$DDNS_UPDATE_DNS_RECORD_DEFAULT")"
+  restart_cooldown="$(ddns_config_value DDNS_RESTART_RELAY_COOLDOWN "$DDNS_RESTART_RELAY_COOLDOWN_DEFAULT")"
+  change_confirm_count="$(ddns_config_value DDNS_CHANGE_CONFIRM_COUNT "$DDNS_CHANGE_CONFIRM_COUNT_DEFAULT")"
   write_file "$DDNS_CONFIG" "DDNS_GLOBAL_ENABLED=${enabled}
 DDNS_GLOBAL_INTERVAL=${interval}
 DDNS_GLOBAL_DOMAINS=${domains}
@@ -5660,6 +5837,8 @@ DNS_RESOLVE_WARN_ON_SPLIT=${dns_warn_on_split}
 DDNS_AUTO_APPLY=${auto_apply}
 DDNS_AUTO_SYNC_PBR=${auto_sync_pbr}
 DDNS_AUTO_RESTART_RELAY=${entry_auto_restart}
+DDNS_RESTART_RELAY_COOLDOWN=${restart_cooldown}
+DDNS_CHANGE_CONFIRM_COUNT=${change_confirm_count}
 DDNS_KEEP_OLD_ON_FAIL=${keep_old}
 DDNS_UPDATE_DNS_RECORD=${update_dns}
 DDNS_REFRESH_INTERVAL=${interval}
@@ -5686,6 +5865,8 @@ ddns_ensure_config() {
     ! grep -q '^DNS_RESOLVE_WARN_ON_SPLIT=' "$DDNS_CONFIG" 2>/dev/null ||
     ! grep -q '^DDNS_AUTO_SYNC_PBR=' "$DDNS_CONFIG" 2>/dev/null ||
     ! grep -q '^DDNS_AUTO_RESTART_RELAY=' "$DDNS_CONFIG" 2>/dev/null ||
+    ! grep -q '^DDNS_RESTART_RELAY_COOLDOWN=' "$DDNS_CONFIG" 2>/dev/null ||
+    ! grep -q '^DDNS_CHANGE_CONFIRM_COUNT=' "$DDNS_CONFIG" 2>/dev/null ||
     ! grep -q '^DDNS_UPDATE_DNS_RECORD=' "$DDNS_CONFIG" 2>/dev/null ||
     ! grep -q '^DDNS_REFRESH_FORWARDS=' "$DDNS_CONFIG" 2>/dev/null ||
     ! grep -q '^DDNS_REFRESH_ENTRIES=' "$DDNS_CONFIG" 2>/dev/null ||
@@ -5809,6 +5990,24 @@ ddns_entry_recent_event_append() {
   DDNS_ENTRY_RECENT_EVENTS="${DDNS_ENTRY_RECENT_EVENTS}${DDNS_ENTRY_RECENT_EVENTS:+;}${line}"
 }
 
+ddns_forward_recent_event_append() {
+  local name="$1" old_ip="$2" new_ip="$3" kind="$4" line
+  case "$kind" in
+    initial) line="${name}: 初次记录 ${new_ip}" ;;
+    *) line="${name}: ${old_ip:-none} -> ${new_ip}" ;;
+  esac
+  DDNS_FORWARD_RECENT_EVENTS="${DDNS_FORWARD_RECENT_EVENTS}${DDNS_FORWARD_RECENT_EVENTS:+;}${line}"
+}
+
+ddns_pbr_recent_event_append() {
+  local name="$1" old_ip="$2" new_ip="$3" kind="$4" line
+  case "$kind" in
+    initial) line="${name}: 初次记录 ${new_ip}" ;;
+    *) line="${name}: ${old_ip:-none} -> ${new_ip}" ;;
+  esac
+  DDNS_PBR_RECENT_EVENTS="${DDNS_PBR_RECENT_EVENTS}${DDNS_PBR_RECENT_EVENTS:+;}${line}"
+}
+
 ddns_print_entry_detection_section() {
   local line
   ddns_output_line ""
@@ -5831,7 +6030,8 @@ ddns_write_last_status() {
   local forward_changed="$3" forward_failed="$4" entry_changed="$5" entry_failed="$6" pbr_changed="$7" pbr_failed="$8"
   local relay_restart_needed="$9" nft_applied="${10}" pbr_applied="${11}" relay_restarted="${12}"
   local public_ip="${13:-${DDNS_PUBLIC_IP:-}}" public_ip_source="${14:-${DDNS_PUBLIC_IP_SOURCE:-}}"
-  local dns_strategy dns_servers dns_split dns_incomplete dns_split_domain dns_split_results dns_selected_ip dns_selected_source entry_recent entry_action
+  local dns_strategy dns_servers dns_split dns_incomplete dns_split_domain dns_split_results dns_selected_ip dns_selected_source
+  local entry_recent entry_action forward_recent forward_action pbr_recent pbr_action relay_restarted_at
   dns_strategy="$(normalize_dns_resolve_strategy "$(ddns_config_value DNS_RESOLVE_STRATEGY "$DNS_RESOLVE_STRATEGY_DEFAULT")")"
   dns_servers="$(ddns_config_value DNS_RESOLVE_SERVERS "$DNS_RESOLVE_SERVERS_DEFAULT")"
   dns_split="${DDNS_DNS_SPLIT_DETECTED:-false}"
@@ -5842,6 +6042,11 @@ ddns_write_last_status() {
   dns_selected_source="${DDNS_DNS_SPLIT_SELECTED_SOURCE:-}"
   entry_recent="${DDNS_ENTRY_RECENT_EVENTS:-}"
   entry_action="${DDNS_ENTRY_RECENT_ACTION:-}"
+  forward_recent="${DDNS_FORWARD_RECENT_EVENTS:-}"
+  forward_action="${DDNS_FORWARD_RECENT_ACTION:-}"
+  pbr_recent="${DDNS_PBR_RECENT_EVENTS:-}"
+  pbr_action="${DDNS_PBR_RECENT_ACTION:-}"
+  relay_restarted_at="${DDNS_RELAY_RESTARTED_AT:-$(env_file_get "$DDNS_STATUS_FILE" LAST_DDNS_RELAY_RESTARTED_AT)}"
   (( DRY_RUN == 1 )) && return 0
   [[ ${EUID:-$(id -u)} -eq 0 ]] || return 0
   mkdir -p "$STATUS_DIR" 2>/dev/null || return 0
@@ -5880,6 +6085,12 @@ ddns_write_last_status() {
     printf 'LAST_DDNS_DNS_SELECTED_SOURCE=%s\n' "$dns_selected_source"
     printf 'LAST_DDNS_ENTRY_RECENT_EVENTS=%s\n' "$entry_recent"
     printf 'LAST_DDNS_ENTRY_RECENT_ACTION=%s\n' "$entry_action"
+    printf 'LAST_DDNS_FORWARD_RECENT_EVENTS=%s\n' "$forward_recent"
+    printf 'LAST_DDNS_FORWARD_RECENT_ACTION=%s\n' "$forward_action"
+    printf 'LAST_DDNS_PBR_RECENT_EVENTS=%s\n' "$pbr_recent"
+    printf 'LAST_DDNS_PBR_RECENT_ACTION=%s\n' "$pbr_action"
+    printf 'LAST_DDNS_RELAY_RESTARTED_AT=%s\n' "$relay_restarted_at"
+    printf 'LAST_DDNS_RELAY_RESTART_SKIPPED_COOLDOWN=%s\n' "${DDNS_RELAY_RESTART_SKIPPED_COOLDOWN:-false}"
     printf 'LAST_DDNS_VERSION=%s\n' "$TOOL_VERSION"
   } >"$DDNS_STATUS_FILE"
   chmod 600 "$DDNS_STATUS_FILE" 2>/dev/null || true
@@ -6023,6 +6234,11 @@ ddns_refresh_forwards_scope() {
         DDNS_FORWARD_CHANGED="${DDNS_FORWARD_CHANGED:+${DDNS_FORWARD_CHANGED},}${name}"
         DDNS_FORWARD_NEED_APPLY=1
         ddns_emit WARN "转发目标 ${name} 解析变化：${old_ip:-none} -> ${target_ip}"
+        if [[ -z "$old_ip" ]]; then
+          ddns_forward_recent_event_append "$name" "" "$target_ip" "initial"
+        else
+          ddns_forward_recent_event_append "$name" "$old_ip" "$target_ip" "changed"
+        fi
         if [[ -n "$route_table" && "$route_table" != "-" ]]; then
           DDNS_FORWARD_PBR_NEED_SYNC=1
           if ! ddns_config_bool DDNS_AUTO_SYNC_FORWARD_PBR "$(ddns_config_value DDNS_AUTO_SYNC_PBR "$DDNS_AUTO_SYNC_FORWARD_PBR_DEFAULT")"; then
@@ -6156,8 +6372,47 @@ ddns_refresh_global_domains_scope() {
   DDNS_GLOBAL_FAILED_COUNT="$failed_count"
 }
 
+ddns_now_epoch() {
+  if [[ "${LQ_TEST_NOW_EPOCH:-}" =~ ^[0-9]+$ ]]; then
+    printf '%s' "$LQ_TEST_NOW_EPOCH"
+  else
+    date +%s
+  fi
+}
+
+ddns_format_epoch() {
+  local epoch="$1"
+  [[ "$epoch" =~ ^[0-9]+$ ]] || { printf '%s' "$epoch"; return 0; }
+  date -d "@${epoch}" '+%F %T' 2>/dev/null ||
+    date -r "$epoch" '+%F %T' 2>/dev/null ||
+    printf '%s' "$epoch"
+}
+
+ddns_relay_restart_cooldown_remaining() {
+  local cooldown last now elapsed
+  cooldown="$(ddns_config_value DDNS_RESTART_RELAY_COOLDOWN "$DDNS_RESTART_RELAY_COOLDOWN_DEFAULT")"
+  [[ "$cooldown" =~ ^[0-9]+$ ]] || cooldown="$DDNS_RESTART_RELAY_COOLDOWN_DEFAULT"
+  (( cooldown > 0 )) || { printf '0'; return 0; }
+  last="$(env_file_get "$DDNS_STATUS_FILE" LAST_DDNS_RELAY_RESTARTED_AT)"
+  [[ "$last" =~ ^[0-9]+$ ]] || { printf '0'; return 0; }
+  now="$(ddns_now_epoch)"
+  elapsed=$((now - last))
+  (( elapsed < 0 )) && elapsed=0
+  if (( elapsed < cooldown )); then
+    printf '%s' "$((cooldown - elapsed))"
+  else
+    printf '0'
+  fi
+}
+
+ddns_note_relay_restarted() {
+  DDNS_RELAY_RESTARTED=true
+  DDNS_RELAY_RESTART_NEEDED=false
+  DDNS_RELAY_RESTARTED_AT="$(ddns_now_epoch)"
+}
+
 ddns_maybe_restart_relay() {
-  local non_interactive="$1" auto_restart default_answer
+  local non_interactive="$1" auto_restart default_answer cooldown_remaining
   [[ "$DDNS_RELAY_RESTART_NEEDED" == "true" ]] || return 0
   auto_restart="$(ddns_config_value DDNS_AUTO_RESTART_RELAY "$(ddns_config_value DDNS_ENTRY_AUTO_RESTART_RELAY "$DDNS_ENTRY_AUTO_RESTART_RELAY_DEFAULT")")"
   ddns_emit WARN "公网入口 ${DDNS_ENTRY_CHANGED} 的 DDNS 解析已变化。"
@@ -6166,10 +6421,10 @@ ddns_maybe_restart_relay() {
     if [[ "${auto_restart,,}" == "true" || "${auto_restart,,}" == "yes" || "$auto_restart" == "1" || "${auto_restart,,}" == "on" ]]; then
       default_answer="Y"
       ddns_emit INFO "DDNS_AUTO_RESTART_RELAY=true"
-      if prompt_yes_no "已允许自动重启 relay；当前为交互执行，是否现在重启 relay？" "$default_answer"; then
+      if prompt_yes_no "当前已允许自动重启 relay；是否现在重启 relay？" "$default_answer"; then
         ddns_auto_snapshot || warn "relay 重启前自动快照失败，将继续按用户确认操作。"
-        if apply_easytier_relay_service confirmed; then
-          DDNS_RELAY_RESTARTED=true
+        if apply_easytier_relay_service confirmed-no-snapshot; then
+          ddns_note_relay_restarted
           ddns_emit OK "已重启 relay。"
         else
           ddns_emit WARN "relay 重启失败，请稍后手动检查。"
@@ -6178,10 +6433,10 @@ ddns_maybe_restart_relay() {
       else
         ddns_emit INFO "已记录公网入口 DDNS 变化，但未重启 relay。"
       fi
-    elif prompt_yes_no "DDNS_AUTO_RESTART_RELAY=false；当前为交互执行，是否现在重启 relay？" "N"; then
+    elif prompt_yes_no "DDNS_AUTO_RESTART_RELAY=false；是否现在重启 relay？" "N"; then
       ddns_auto_snapshot || warn "relay 重启前自动快照失败，将继续按用户确认操作。"
-      if apply_easytier_relay_service confirmed; then
-        DDNS_RELAY_RESTARTED=true
+      if apply_easytier_relay_service confirmed-no-snapshot; then
+        ddns_note_relay_restarted
         ddns_emit OK "已重启 relay。"
       else
         ddns_emit WARN "relay 重启失败，请稍后手动检查。"
@@ -6192,16 +6447,22 @@ ddns_maybe_restart_relay() {
       ddns_emit INFO "可在维护窗口执行：利群主机 -> EasyTier 组网管理 -> 启动 / 重启 relay 服务"
     fi
   elif ddns_config_bool DDNS_AUTO_RESTART_RELAY "$(ddns_config_value DDNS_ENTRY_AUTO_RESTART_RELAY "$DDNS_ENTRY_AUTO_RESTART_RELAY_DEFAULT")"; then
-    ddns_emit INFO "DDNS_AUTO_RESTART_RELAY=true，正在自动重启 relay。"
-    if ddns_auto_snapshot && apply_easytier_relay_service confirmed; then
-      DDNS_RELAY_RESTARTED=true
+    ddns_emit INFO "非交互模式，DDNS_AUTO_RESTART_RELAY=true，正在自动重启 relay。"
+    cooldown_remaining="$(ddns_relay_restart_cooldown_remaining)"
+    if [[ "$cooldown_remaining" =~ ^[0-9]+$ ]] && (( cooldown_remaining > 0 )); then
+      DDNS_RELAY_RESTART_SKIPPED_COOLDOWN=true
+      ddns_emit WARN "relay 最近已自动重启，处于 cooldown，跳过本次自动重启。"
+      return 0
+    fi
+    if ddns_auto_snapshot && apply_easytier_relay_service confirmed-no-snapshot; then
+      ddns_note_relay_restarted
       ddns_emit OK "已自动重启 relay。"
     else
       ddns_emit WARN "relay 自动重启失败。"
       return 1
     fi
   else
-    ddns_emit INFO "DDNS_AUTO_RESTART_RELAY=false，非交互模式只标记 relay restart needed。"
+    ddns_emit INFO "非交互模式，DDNS_AUTO_RESTART_RELAY=false，仅标记 relay restart needed。"
   fi
 }
 
@@ -6231,6 +6492,12 @@ ddns_refresh_once() {
   DDNS_ENTRY_REPORT_BLOCKS=""
   DDNS_ENTRY_RECENT_EVENTS=""
   DDNS_ENTRY_RECENT_ACTION=""
+  DDNS_FORWARD_RECENT_EVENTS=""
+  DDNS_FORWARD_RECENT_ACTION=""
+  DDNS_PBR_RECENT_EVENTS=""
+  DDNS_PBR_RECENT_ACTION=""
+  DDNS_RELAY_RESTARTED_AT=""
+  DDNS_RELAY_RESTART_SKIPPED_COOLDOWN=false
   DDNS_FORWARD_CHECKED=0; DDNS_FORWARD_DOMAIN_COUNT=0; DDNS_FORWARD_CHANGED_COUNT=0; DDNS_FORWARD_FAILED_COUNT=0
   DDNS_ENTRY_CHECKED=0; DDNS_ENTRY_DOMAIN_COUNT=0; DDNS_ENTRY_CHANGED_COUNT=0; DDNS_ENTRY_FAILED_COUNT=0
   DDNS_PBR_DOMAIN_COUNT=0; DDNS_PBR_CHANGED_COUNT=0; DDNS_PBR_FAILED_COUNT=0
@@ -6251,6 +6518,7 @@ ddns_refresh_once() {
   DDNS_DNS_SPLIT_RESULTS=""
   DDNS_DNS_SPLIT_SELECTED_IP=""
   DDNS_DNS_SPLIT_SELECTED_SOURCE=""
+  dnsutils_auto_install "ddns-run" "false" "ddns" || true
   ddns_emit INFO "域名解析变化检测开始，scope=${scope}。"
   if detect_public_ipv4 >/dev/null; then
     public_ip="$DDNS_PUBLIC_IP"
@@ -6278,14 +6546,17 @@ ddns_refresh_once() {
   if ddns_scope_requested "$scope" pbr; then
     if ddns_scope_enabled DDNS_REFRESH_PBR "$DDNS_REFRESH_PBR_DEFAULT"; then
       DDNS_PBR_DOMAIN_COUNT="$(ddns_domain_pbr_count 2>/dev/null || printf '0')"
-      if ddns_config_bool DDNS_AUTO_SYNC_DOMAIN_PBR "$DDNS_AUTO_SYNC_DOMAIN_PBR_DEFAULT"; then
+      if ddns_config_bool DDNS_AUTO_SYNC_PBR "$DDNS_AUTO_SYNC_PBR_DEFAULT" &&
+        ddns_config_bool DDNS_AUTO_SYNC_DOMAIN_PBR "$DDNS_AUTO_SYNC_DOMAIN_PBR_DEFAULT"; then
         pbr_domain_sync --from-ddns || result="warn"
         [[ -n "$PBR_DOMAIN_SYNC_CHANGED_NAMES" ]] && DDNS_PBR_CHANGED="$PBR_DOMAIN_SYNC_CHANGED_NAMES"
         [[ -n "$PBR_DOMAIN_SYNC_FAILED_NAMES" ]] && DDNS_PBR_FAILED="$PBR_DOMAIN_SYNC_FAILED_NAMES"
+        [[ -n "${PBR_DOMAIN_SYNC_RECENT_EVENTS:-}" ]] && DDNS_PBR_RECENT_EVENTS="$PBR_DOMAIN_SYNC_RECENT_EVENTS"
         DDNS_PBR_CHANGED_COUNT="$(csv_count "$DDNS_PBR_CHANGED")"
         DDNS_PBR_FAILED_COUNT="$(csv_count "$DDNS_PBR_FAILED")"
       else
-        ddns_emit INFO "DDNS_AUTO_SYNC_DOMAIN_PBR=false，跳过域名 PBR 自动同步。"
+        ddns_emit INFO "DDNS_AUTO_SYNC_PBR=false 或 DDNS_AUTO_SYNC_DOMAIN_PBR=false，刷新域名 PBR 缓存但不自动同步规则。"
+        pbr_domain_refresh_cache_only || result="warn"
       fi
     else
       ddns_emit INFO "pbr scope 已禁用。"
@@ -6349,6 +6620,26 @@ ddns_refresh_once() {
       DDNS_ENTRY_RECENT_ACTION="${DDNS_ENTRY_RECENT_ACTION} / relay restart needed"
     fi
   fi
+  if [[ -n "$DDNS_FORWARD_RECENT_EVENTS" ]]; then
+    DDNS_FORWARD_RECENT_ACTION="已写入缓存"
+    if [[ "$DDNS_NFT_APPLIED" == "true" ]]; then
+      DDNS_FORWARD_RECENT_ACTION="${DDNS_FORWARD_RECENT_ACTION} / 已重应用 nftables"
+    elif (( DDNS_FORWARD_NEED_APPLY == 1 )); then
+      DDNS_FORWARD_RECENT_ACTION="${DDNS_FORWARD_RECENT_ACTION} / 待重应用 nftables"
+    fi
+  fi
+  if [[ -n "$DDNS_PBR_RECENT_EVENTS" ]]; then
+    DDNS_PBR_RECENT_ACTION="已写入缓存"
+    if [[ "$DDNS_PBR_APPLIED" == "true" ]]; then
+      DDNS_PBR_RECENT_ACTION="${DDNS_PBR_RECENT_ACTION} / 已同步 PBR"
+    elif [[ -n "$DDNS_PBR_CHANGED" ]] &&
+      ddns_config_bool DDNS_AUTO_SYNC_PBR "$DDNS_AUTO_SYNC_PBR_DEFAULT" &&
+      ddns_config_bool DDNS_AUTO_SYNC_DOMAIN_PBR "$DDNS_AUTO_SYNC_DOMAIN_PBR_DEFAULT"; then
+      DDNS_PBR_RECENT_ACTION="${DDNS_PBR_RECENT_ACTION} / 已同步 PBR"
+    elif [[ -n "$DDNS_PBR_CHANGED" ]]; then
+      DDNS_PBR_RECENT_ACTION="${DDNS_PBR_RECENT_ACTION} / 待同步 PBR"
+    fi
+  fi
   if [[ -n "$DDNS_FORWARD_FAILED$DDNS_ENTRY_FAILED$DDNS_PBR_FAILED" && "$result" == "ok" ]]; then
     result="warn"
   fi
@@ -6371,6 +6662,9 @@ ddns_refresh_once() {
 
 render_ddns_service() {
   local exec_path="$SHORTCUT_LQ"
+  if [[ ! -x "$exec_path" ]]; then
+    exec_path="$(readlink -f "${BASH_SOURCE[0]}" 2>/dev/null || printf '%s' "${BASH_SOURCE[0]}")"
+  fi
   cat <<EOF
 # Managed by leikwan-toolkit ${TOOL_VERSION}
 [Unit]
@@ -6415,6 +6709,7 @@ ddns_install_units() {
 ddns_enable_timer() {
   need_root_unless_dry_run
   ddns_ensure_config
+  dnsutils_auto_install "ddns-enable" "false" "plain" || true
   ddns_write_config "$(ddns_config_value DDNS_GLOBAL_INTERVAL "$(ddns_config_value DDNS_REFRESH_INTERVAL "$DDNS_GLOBAL_INTERVAL_DEFAULT")")" \
     "$(ddns_config_value DDNS_REFRESH_FORWARDS "$DDNS_REFRESH_FORWARDS_DEFAULT")" \
     "$(ddns_config_value DDNS_REFRESH_ENTRIES "$DDNS_REFRESH_ENTRIES_DEFAULT")" \
@@ -6461,11 +6756,13 @@ ddns_status() {
   local last_time last_result last_scope forward_changed forward_failed entry_changed entry_failed pbr_changed pbr_failed
   local relay_restart_needed nft_applied pbr_applied relay_restarted public_ip public_ip_source
   local dns_strategy dns_servers dns_split dns_incomplete dns_split_domain dns_split_results dns_selected_ip dns_selected_source dns_line
-  local entry_recent_events entry_recent_action entry_line
-  local -a _ddns_status_dns_lines _ddns_status_entry_lines
+  local entry_recent_events entry_recent_action entry_line forward_recent_events forward_recent_action forward_line pbr_recent_events pbr_recent_action pbr_line
+  local recent_auto_action relay_restarted_at restart_cooldown change_confirm_count
+  local -a _ddns_status_dns_lines _ddns_status_entry_lines _ddns_status_forward_lines _ddns_status_pbr_lines
   local forward_count entry_count pbr_count forward_checked entry_checked pbr_checked
   local forward_changed_count forward_failed_count entry_changed_count entry_failed_count pbr_changed_count pbr_failed_count
   local nft_text pbr_text
+  dnsutils_auto_install "ddns-status" "false" "plain" || true
   timer_state="$(ddns_timer_state)"
   if [[ "$timer_state" == "active" ]]; then
     timer_display="enabled"
@@ -6493,6 +6790,7 @@ ddns_status() {
   nft_applied="$(env_file_get "$DDNS_STATUS_FILE" LAST_DDNS_NFT_APPLIED)"
   pbr_applied="$(env_file_get "$DDNS_STATUS_FILE" LAST_DDNS_PBR_APPLIED)"
   relay_restarted="$(env_file_get "$DDNS_STATUS_FILE" LAST_DDNS_RELAY_RESTARTED)"
+  relay_restarted_at="$(env_file_get "$DDNS_STATUS_FILE" LAST_DDNS_RELAY_RESTARTED_AT)"
   dns_strategy="$(env_file_get "$DDNS_STATUS_FILE" LAST_DDNS_DNS_STRATEGY)"
   [[ -n "$dns_strategy" ]] || dns_strategy="$(normalize_dns_resolve_strategy "$(ddns_config_value DNS_RESOLVE_STRATEGY "$DNS_RESOLVE_STRATEGY_DEFAULT")")"
   dns_servers="$(env_file_get "$DDNS_STATUS_FILE" LAST_DDNS_DNS_SERVERS)"
@@ -6523,6 +6821,8 @@ ddns_status() {
   [[ -n "$pbr_failed_count" ]] || pbr_failed_count="$(csv_count "$pbr_failed")"
   nft_text="$(ddns_action_text "${nft_applied:-false}" "已重应用" "待重应用" "无需重应用")"
   pbr_text="$(ddns_action_text "${pbr_applied:-false}" "已同步" "待同步" "无需同步")"
+  restart_cooldown="$(ddns_config_value DDNS_RESTART_RELAY_COOLDOWN "$DDNS_RESTART_RELAY_COOLDOWN_DEFAULT")"
+  change_confirm_count="$(ddns_config_value DDNS_CHANGE_CONFIRM_COUNT "$DDNS_CHANGE_CONFIRM_COUNT_DEFAULT")"
   if [[ "${last_result,,}" == "fail" && "${nft_applied:-false}" != "true" && -n "$forward_changed" ]]; then
     nft_text="失败"
   fi
@@ -6553,7 +6853,24 @@ ddns_status() {
   echo "PBR: ${pbr_text}"
   echo "relay restart needed: $(bool_yes_no "${relay_restart_needed:-false}")"
   [[ "${relay_restarted:-false}" == "true" ]] && echo "relay restarted: yes"
+  [[ -n "$relay_restarted_at" ]] && echo "relay 最近自动重启: $(ddns_format_epoch "$relay_restarted_at")"
+  echo "relay restart cooldown: ${restart_cooldown}s"
+  echo "DDNS 变化确认次数: ${change_confirm_count}"
   echo "最近检测: ${last_time:-"-"}"
+  echo "最近自动执行: ${last_time:-"-"}"
+  recent_auto_action=""
+  if [[ -n "$(env_file_get "$DDNS_STATUS_FILE" LAST_DDNS_ENTRY_RECENT_EVENTS)$(env_file_get "$DDNS_STATUS_FILE" LAST_DDNS_FORWARD_RECENT_EVENTS)$(env_file_get "$DDNS_STATUS_FILE" LAST_DDNS_PBR_RECENT_EVENTS)" ]]; then
+    recent_auto_action="已写入缓存"
+  fi
+  [[ "${nft_applied:-false}" == "true" ]] && recent_auto_action="${recent_auto_action}${recent_auto_action:+ / }已重应用 nftables"
+  [[ "${pbr_applied:-false}" == "true" ]] && recent_auto_action="${recent_auto_action}${recent_auto_action:+ / }已同步 PBR"
+  [[ "${relay_restarted:-false}" == "true" ]] && recent_auto_action="${recent_auto_action}${recent_auto_action:+ / }relay 已重启"
+  [[ "${relay_restart_needed:-false}" == "true" ]] && recent_auto_action="${recent_auto_action}${recent_auto_action:+ / }relay restart needed"
+  if [[ -z "$recent_auto_action" && -n "$last_time" ]]; then
+    recent_auto_action="已写入缓存"
+  fi
+  [[ -n "$recent_auto_action" ]] || recent_auto_action="无"
+  echo "最近自动动作: ${recent_auto_action}"
   echo "结果: $(status_result_display "${last_result:-unknown}")"
   if [[ "${update_dns,,}" == "true" ]]; then
     echo "[WARN] DDNS_UPDATE_DNS_RECORD=true，高级兼容 DNS 更新能力已显式启用。"
@@ -6578,6 +6895,28 @@ ddns_status() {
       [[ -n "$entry_line" ]] && echo "$entry_line"
     done
     echo "动作: ${entry_recent_action:-已写入缓存}"
+  fi
+  forward_recent_events="$(env_file_get "$DDNS_STATUS_FILE" LAST_DDNS_FORWARD_RECENT_EVENTS)"
+  forward_recent_action="$(env_file_get "$DDNS_STATUS_FILE" LAST_DDNS_FORWARD_RECENT_ACTION)"
+  if [[ -n "$forward_recent_events" ]]; then
+    echo
+    echo "最近转发目标变化:"
+    IFS=';' read -ra _ddns_status_forward_lines <<<"$forward_recent_events"
+    for forward_line in "${_ddns_status_forward_lines[@]}"; do
+      [[ -n "$forward_line" ]] && echo "$forward_line"
+    done
+    echo "动作: ${forward_recent_action:-已写入缓存}"
+  fi
+  pbr_recent_events="$(env_file_get "$DDNS_STATUS_FILE" LAST_DDNS_PBR_RECENT_EVENTS)"
+  pbr_recent_action="$(env_file_get "$DDNS_STATUS_FILE" LAST_DDNS_PBR_RECENT_ACTION)"
+  if [[ -n "$pbr_recent_events" ]]; then
+    echo
+    echo "最近 PBR 域名变化:"
+    IFS=';' read -ra _ddns_status_pbr_lines <<<"$pbr_recent_events"
+    for pbr_line in "${_ddns_status_pbr_lines[@]}"; do
+      [[ -n "$pbr_line" ]] && echo "$pbr_line"
+    done
+    echo "动作: ${pbr_recent_action:-已写入缓存}"
   fi
   [[ -n "$last_scope" ]] && echo "详细分类: ${last_scope}"
   return 0
@@ -6604,9 +6943,9 @@ ddns_apply_entries() {
   info "重启 relay 会短暂影响所有入口。"
   if (( non_interactive == 1 )) || ! is_interactive; then
     if ddns_config_bool DDNS_AUTO_RESTART_RELAY "$(ddns_config_value DDNS_ENTRY_AUTO_RESTART_RELAY "$DDNS_ENTRY_AUTO_RESTART_RELAY_DEFAULT")"; then
-      info "DDNS_AUTO_RESTART_RELAY=true，正在自动重启 relay。"
+      info "非交互模式，DDNS_AUTO_RESTART_RELAY=true，正在自动重启 relay。"
     else
-      info "非交互模式不自动重启 relay。"
+      info "非交互模式，DDNS_AUTO_RESTART_RELAY=false，仅标记 relay restart needed。"
       info "可在维护窗口执行：lq ddns apply-entries"
       return 0
     fi
@@ -6616,7 +6955,8 @@ ddns_apply_entries() {
     return 0
   fi
   ddns_auto_snapshot || warn "relay 重启前自动快照失败，将继续按用户确认操作。"
-  if apply_easytier_relay_service confirmed; then
+  if apply_easytier_relay_service confirmed-no-snapshot; then
+    ddns_note_relay_restarted
     ok "已重启 relay。"
     test_all_enabled_entries || warn "公网入口连通性测试存在 WARN，请执行 lq --doctor 查看。"
     ddns_write_last_status "ok" "entries" "" "" "$changed" "" "" "" false false false true
@@ -7022,6 +7362,29 @@ ddns_toggle_auto_restart_relay() {
   ok "DDNS_AUTO_RESTART_RELAY=${value}"
 }
 
+ddns_set_relay_restart_cooldown() {
+  need_root_unless_dry_run
+  ddns_ensure_config
+  local value
+  echo "当前 relay 自动重启 cooldown：$(ddns_config_value DDNS_RESTART_RELAY_COOLDOWN "$DDNS_RESTART_RELAY_COOLDOWN_DEFAULT") 秒"
+  value="$(prompt_value "新的 cooldown 秒数" "$(ddns_config_value DDNS_RESTART_RELAY_COOLDOWN "$DDNS_RESTART_RELAY_COOLDOWN_DEFAULT")")"
+  if ! [[ "$value" =~ ^[0-9]+$ ]]; then
+    warn "cooldown 必须是非负整数秒。"
+    return 0
+  fi
+  if (( DRY_RUN == 1 )); then
+    echo "[DRY-RUN] DDNS_RESTART_RELAY_COOLDOWN=${value}"
+    return 0
+  fi
+  touch "$DDNS_CONFIG"
+  if grep -q '^DDNS_RESTART_RELAY_COOLDOWN=' "$DDNS_CONFIG" 2>/dev/null; then
+    sed -i "s/^DDNS_RESTART_RELAY_COOLDOWN=.*/DDNS_RESTART_RELAY_COOLDOWN=${value}/" "$DDNS_CONFIG"
+  else
+    printf 'DDNS_RESTART_RELAY_COOLDOWN=%s\n' "$value" >>"$DDNS_CONFIG"
+  fi
+  ok "DDNS_RESTART_RELAY_COOLDOWN=${value}"
+}
+
 ddns_legacy_dns_update_menu() {
   print_menu_header "兼容旧版 DNS 更新配置"
   echo "该入口仅为旧脚本兼容。普通用户不需要配置 DNS provider token。"
@@ -7052,7 +7415,8 @@ ddns_advanced_menu() {
     echo "6. 设置是否自动重应用 nftables"
     echo "7. 设置是否自动同步 PBR"
     echo "8. 设置 relay 是否允许自动重启"
-    echo "9. 兼容旧版 DNS 更新配置"
+    echo "9. 设置 relay 自动重启 cooldown"
+    echo "10. 兼容旧版 DNS 更新配置"
     echo "0. 返回"
     choice="$(prompt_menu_choice "请选择：")"
     case "$choice" in
@@ -7064,7 +7428,8 @@ ddns_advanced_menu() {
       6) run_menu_action_pause ddns_toggle_auto_apply ;;
       7) run_menu_action_pause ddns_toggle_auto_sync_pbr ;;
       8) run_menu_action_pause ddns_toggle_auto_restart_relay ;;
-      9) run_menu_action_pause ddns_legacy_dns_update_menu ;;
+      9) run_menu_action_pause ddns_set_relay_restart_cooldown ;;
+      10) run_menu_action_pause ddns_legacy_dns_update_menu ;;
       0) return 0 ;;
       "") menu_input_required ;;
       *) menu_invalid_choice ;;
@@ -8213,6 +8578,78 @@ select_pbr_domain_name() {
   done
 }
 
+pbr_domain_refresh_cache_only() {
+  need_root_unless_dry_run
+  ensure_tsv_files >/dev/null
+  local tmp_resolved checked_at name host route_table enabled comment old_ip new_ip old_changed last_changed
+  local candidates=0 failed=0 changed=0
+  PBR_DOMAIN_SYNC_CHANGED_NAMES=""
+  PBR_DOMAIN_SYNC_FAILED_NAMES=""
+  PBR_DOMAIN_SYNC_RECENT_EVENTS=""
+  tmp_resolved="$(make_state_tmp "$PBR_DIR" "resolved-pbr-domains")" || return 1
+  checked_at="$(status_now)"
+  printf '# name\thost\tresolved_ip\troute_table\tlast_checked\tlast_changed\n' >"$tmp_resolved"
+  while IFS=$'\t' read -r name host route_table enabled comment; do
+    old_ip="$(last_resolved_ip_for_pbr_domain "$name")"
+    old_changed="$(last_resolved_changed_for_pbr_domain "$name")"
+    if [[ "$enabled" != "true" ]]; then
+      [[ -n "$old_ip" ]] && printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$name" "$host" "$old_ip" "$route_table" "$checked_at" "${old_changed:-$checked_at}" >>"$tmp_resolved"
+      continue
+    fi
+    candidates=$((candidates + 1))
+    if ! is_domain_name "$host"; then
+      ddns_emit WARN "域名 PBR ${name} 的 host 不是域名：${host}"
+      failed=$((failed + 1))
+      PBR_DOMAIN_SYNC_FAILED_NAMES="${PBR_DOMAIN_SYNC_FAILED_NAMES:+${PBR_DOMAIN_SYNC_FAILED_NAMES},}${name}"
+      continue
+    fi
+    if resolve_domain_ipv4_multi "$host"; then
+      new_ip="$RESOLVE_SELECTED_IP"
+    else
+      new_ip=""
+    fi
+    if [[ -z "$new_ip" ]]; then
+      failed=$((failed + 1))
+      PBR_DOMAIN_SYNC_FAILED_NAMES="${PBR_DOMAIN_SYNC_FAILED_NAMES:+${PBR_DOMAIN_SYNC_FAILED_NAMES},}${name}"
+      if [[ -n "$old_ip" ]]; then
+        ddns_emit WARN "域名 PBR ${name} 解析失败，保留旧 IP：${old_ip}"
+        new_ip="$old_ip"
+        last_changed="${old_changed:-$checked_at}"
+      else
+        ddns_emit WARN "域名 PBR ${name} 解析失败，且没有旧 IP：${host}"
+        continue
+      fi
+    elif [[ -n "$old_ip" && "$old_ip" == "$new_ip" ]]; then
+      ddns_emit OK "域名 PBR ${name} 解析未变化：${new_ip}"
+      last_changed="${old_changed:-$checked_at}"
+    else
+      changed=$((changed + 1))
+      PBR_DOMAIN_SYNC_CHANGED_NAMES="${PBR_DOMAIN_SYNC_CHANGED_NAMES:+${PBR_DOMAIN_SYNC_CHANGED_NAMES},}${name}"
+      ddns_emit WARN "域名 PBR ${name} 解析变化：${old_ip:-none} -> ${new_ip}"
+      if [[ -z "$old_ip" ]]; then
+        PBR_DOMAIN_SYNC_RECENT_EVENTS="${PBR_DOMAIN_SYNC_RECENT_EVENTS}${PBR_DOMAIN_SYNC_RECENT_EVENTS:+;}${name}: 初次记录 ${new_ip}"
+      else
+        PBR_DOMAIN_SYNC_RECENT_EVENTS="${PBR_DOMAIN_SYNC_RECENT_EVENTS}${PBR_DOMAIN_SYNC_RECENT_EVENTS:+;}${name}: ${old_ip:-none} -> ${new_ip}"
+      fi
+      last_changed="$checked_at"
+    fi
+    printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$name" "$host" "$new_ip" "$route_table" "$checked_at" "$last_changed" >>"$tmp_resolved"
+  done < <(pbr_domain_rows)
+  write_file_from_path "$PBR_RESOLVED_DOMAIN_TSV" "$tmp_resolved" 600
+  rm -f "$tmp_resolved"
+  DDNS_PBR_CHANGED="$PBR_DOMAIN_SYNC_CHANGED_NAMES"
+  DDNS_PBR_FAILED="$PBR_DOMAIN_SYNC_FAILED_NAMES"
+  DDNS_PBR_CHANGED_COUNT="$changed"
+  DDNS_PBR_FAILED_COUNT="$failed"
+  DDNS_PBR_RECENT_EVENTS="$PBR_DOMAIN_SYNC_RECENT_EVENTS"
+  if (( candidates == 0 )); then
+    ddns_emit INFO "没有 enabled 域名 PBR 需要刷新缓存。"
+  else
+    ddns_emit INFO "域名 PBR 缓存刷新完成：enabled=${candidates}，changed=${changed}，failed=${failed}。"
+  fi
+  (( failed == 0 ))
+}
+
 pbr_domain_sync() {
   need_root_unless_dry_run
   ensure_tsv_files >/dev/null
@@ -8234,10 +8671,18 @@ pbr_domain_sync() {
   local cidr group candidates=0 synced=0 skipped=0 failed=0 changed=0 rc=0
   PBR_DOMAIN_SYNC_CHANGED_NAMES=""
   PBR_DOMAIN_SYNC_FAILED_NAMES=""
+  PBR_DOMAIN_SYNC_RECENT_EVENTS=""
   mkdir -p "$PBR_DIR"
   [[ -f "$PBR_STATIC_CONF" ]] || : >"$PBR_STATIC_CONF"
-  tmp_static="$(mktemp)"
-  tmp_resolved="$(mktemp)"
+  tmp_static="$(make_state_tmp "$PBR_DIR" "static-routes")" || {
+    (( acquired_lock == 1 )) && global_lock_release
+    return 1
+  }
+  tmp_resolved="$(make_state_tmp "$PBR_DIR" "resolved-pbr-domains")" || {
+    rm -f "$tmp_static"
+    (( acquired_lock == 1 )) && global_lock_release
+    return 1
+  }
   checked_at="$(status_now)"
   awk '
     /^[[:space:]]*($|#)/ { print; next }
@@ -8282,6 +8727,11 @@ pbr_domain_sync() {
       changed=$((changed + 1))
       PBR_DOMAIN_SYNC_CHANGED_NAMES="${PBR_DOMAIN_SYNC_CHANGED_NAMES:+${PBR_DOMAIN_SYNC_CHANGED_NAMES},}${name}"
       warn "域名 PBR ${name} 解析变化：${old_ip:-none} -> ${new_ip}"
+      if [[ -z "$old_ip" ]]; then
+        PBR_DOMAIN_SYNC_RECENT_EVENTS="${PBR_DOMAIN_SYNC_RECENT_EVENTS}${PBR_DOMAIN_SYNC_RECENT_EVENTS:+;}${name}: 初次记录 ${new_ip}"
+      else
+        PBR_DOMAIN_SYNC_RECENT_EVENTS="${PBR_DOMAIN_SYNC_RECENT_EVENTS}${PBR_DOMAIN_SYNC_RECENT_EVENTS:+;}${name}: ${old_ip:-none} -> ${new_ip}"
+      fi
       last_changed="$checked_at"
     fi
     printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$name" "$host" "$new_ip" "$route_table" "$checked_at" "$last_changed" >>"$tmp_resolved"
@@ -8295,8 +8745,8 @@ pbr_domain_sync() {
     printf '%s %s pbr-domain:%s %s\n' "$cidr" "$group" "$name" "$host" >>"$tmp_static"
     synced=$((synced + 1))
   done < <(pbr_domain_rows)
-  write_file "$PBR_RESOLVED_DOMAIN_TSV" "$(cat "$tmp_resolved")" 600
-  write_file "$PBR_STATIC_CONF" "$(cat "$tmp_static")" 600
+  write_file_from_path "$PBR_RESOLVED_DOMAIN_TSV" "$tmp_resolved" 600
+  write_file_from_path "$PBR_STATIC_CONF" "$tmp_static" 600
   rm -f "$tmp_static" "$tmp_resolved"
   if (( candidates == 0 )); then
     info "没有 enabled 域名 PBR 需要同步。"
@@ -9798,6 +10248,7 @@ doctor() {
   bbr_cc="$(sysctl -n net.ipv4.tcp_congestion_control 2>/dev/null || true)"
   bbr_qdisc="$(sysctl -n net.core.default_qdisc 2>/dev/null || true)"
   if [[ "$bbr_cc" == "bbr" && "$bbr_qdisc" == "fq" ]]; then report OK "BBR/fq enabled"; else report INFO "BBR=${bbr_cc:-unknown}, qdisc=${bbr_qdisc:-unknown}"; fi
+  dnsutils_auto_install "doctor" "false" "plain" || true
   doctor_dependency_tools
   doctor_fake_ip_dns
   doctor_apt_sources
@@ -10240,7 +10691,7 @@ report_ddns_global_state() {
     report INFO "可调整 DNS_RESOLVE_SERVERS 或 DNS_RESOLVE_STRATEGY。"
   fi
   if { [[ "${ddns_enabled,,}" == "true" ]] || [[ "$timer_state" == "active" ]]; } && ! command -v dig >/dev/null 2>&1; then
-    report WARN "建议安装 dnsutils 以启用多 DNS 解析器检测：apt install -y dnsutils"
+    report WARN "dig 不存在，已尝试自动安装 dnsutils；当前将使用 nslookup / host / getent fallback。"
   fi
   if [[ "${restart_needed:-false}" == "true" ]]; then
     report WARN "relay restart needed: yes，请在维护窗口重启 relay。"
@@ -11762,6 +12213,10 @@ auto_snapshot_or_confirm() {
     return 0
   fi
   warn "自动快照失败，建议先手动创建快照。"
+  if ! is_interactive; then
+    warn "非交互模式不进行确认 prompt，已跳过本次操作。"
+    return 1
+  fi
   prompt_yes_no "是否继续？" "N"
 }
 

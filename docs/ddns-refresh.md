@@ -1,6 +1,6 @@
 # 域名解析变化自动刷新
 
-Leikwan Toolkit 1.4.4 LTS 将 DDNS 用户路径收敛为 B 利群主机侧的“域名解析变化自动刷新”。它默认不修改 DNS 服务商记录，也不要求配置 DNS provider token。
+Leikwan Toolkit 1.4.5 LTS 将 DDNS 用户路径收敛为 B 利群主机侧的“域名解析变化自动刷新”。它默认不修改 DNS 服务商记录，也不要求配置 DNS provider token。
 
 公网入口 A 的域名 / IP 可以由路由器、服务商客户端、Cloudflare、外部 DDNS 客户端或外部脚本维护。Toolkit 只在 B 侧定时解析域名，发现解析结果相对本地缓存变化后刷新本机转发、缓存和 PBR。
 
@@ -31,7 +31,7 @@ lq ddns logs
 
 ## 多 DNS 解析器
 
-1.4.4 起，域名解析变化检测不再只依赖系统默认 DNS。它会按配置的解析器列表执行 A 记录查询，并检测国内外 DNS 传播不一致或缓存不一致。
+1.4.5 起，域名解析变化检测不再只依赖系统默认 DNS。它会按配置的解析器列表执行 A 记录查询，并检测国内外 DNS 传播不一致或缓存不一致。
 
 默认配置：
 
@@ -43,17 +43,7 @@ DNS_RESOLVE_WARN_ON_SPLIT=true
 
 默认优先使用 `1.1.1.1` / `8.8.8.8`，再使用国内 DNS。用户可以调整 `DNS_RESOLVE_SERVERS` 的顺序。
 
-建议安装 `dnsutils` 以获得完整的多 DNS 解析器检测能力：
-
-```bash
-apt install -y dnsutils
-```
-
-`lq doctor --auto-fix` 可以安装 `dnsutils`。非交互环境需要显式设置：
-
-```bash
-LQ_AUTO_FIX_INSTALL_DNSUTILS=true lq doctor --auto-fix
-```
+缺少 `dig` 时，`lq ddns run`、`lq ddns status`、`lq doctor`、`lq doctor --auto-fix` 和 DDNS timer 会在 root + apt-get 环境下自动安装 `dnsutils`。安装失败不会中断检测。
 
 没有 `dig` 时，脚本会依次尝试 `nslookup DOMAIN SERVER`、`host DOMAIN SERVER`，最后 fallback 到 `getent ahostsv4 DOMAIN`。如果只能使用系统 resolver，状态会显示：
 
@@ -132,6 +122,8 @@ DNS_RESOLVE_WARN_ON_SPLIT=true
 DDNS_AUTO_APPLY=true
 DDNS_AUTO_SYNC_PBR=true
 DDNS_AUTO_RESTART_RELAY=false
+DDNS_RESTART_RELAY_COOLDOWN=300
+DDNS_CHANGE_CONFIRM_COUNT=1
 DDNS_KEEP_OLD_ON_FAIL=true
 DDNS_UPDATE_DNS_RECORD=false
 ```
@@ -160,7 +152,10 @@ DDNS_UPDATE_DNS_RECORD=false
 
 ```text
 DDNS_AUTO_RESTART_RELAY=true
+DDNS_RESTART_RELAY_COOLDOWN=300
 ```
+
+非交互模式不会询问确认。`DDNS_AUTO_RESTART_RELAY=true` 时会自动重启 relay；`DDNS_AUTO_RESTART_RELAY=false` 时只标记 `relay restart needed`。自动重启默认 300 秒 cooldown，短时间 DNS 抖动只会更新缓存并保留 pending restart，不会重复重启。
 
 ## 状态输出
 
@@ -188,7 +183,11 @@ PBR 域名: checked 1, changed 0, failed 0
 nftables: 无需重应用
 PBR: 无需同步
 relay restart needed: no
+relay restart cooldown: 300s
+DDNS 变化确认次数: 1
 最近检测: 2026-05-14 12:00:00
+最近自动执行: 2026-05-14 12:00:00
+最近自动动作: 已写入缓存
 结果: OK
 ```
 

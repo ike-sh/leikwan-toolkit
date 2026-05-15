@@ -18,6 +18,7 @@ mkdir -p "$LEIKWAN_RUN_DIR"
 # shellcheck source=/dev/null
 source "$ROOT_DIR/leikwan-toolkit.sh"
 mkdir -p "$STATUS_DIR"
+dnsutils_auto_install() { return 0; }
 
 cat >"$DDNS_STATUS_FILE" <<'EOF'
 LAST_DDNS_TIME=2026-05-15 12:00:00

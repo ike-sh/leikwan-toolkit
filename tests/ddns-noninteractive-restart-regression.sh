@@ -62,7 +62,7 @@ DDNS_RELAY_RESTARTED=false
 DDNS_RELAY_RESTART_NEEDED=true
 TEST_AUTO_RESTART=false
 out_false="$(ddns_maybe_restart_relay 1 2>&1)"
-grep -q "DDNS_AUTO_RESTART_RELAY=false，非交互模式只标记 relay restart needed" <<<"$out_false"
+grep -q "非交互模式，DDNS_AUTO_RESTART_RELAY=false，仅标记 relay restart needed" <<<"$out_false"
 if grep -q "\[MOCK\] relay restart" <<<"$out_false"; then
   echo "FAIL: non-interactive false auto restart should not restart" >&2
   echo "$out_false" >&2

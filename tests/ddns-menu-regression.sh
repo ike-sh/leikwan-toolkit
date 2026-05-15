@@ -41,7 +41,8 @@ advanced_out="$(printf '0\n' | ddns_advanced_menu 2>&1 || true)"
 grep -q "3. 设置 DNS 解析器列表" <<<"$advanced_out"
 grep -q "4. 设置 DNS 解析策略" <<<"$advanced_out"
 grep -q "5. 查看最近 DNS 分歧" <<<"$advanced_out"
-grep -q "9. 兼容旧版 DNS 更新配置" <<<"$advanced_out"
+grep -q "9. 设置 relay 自动重启 cooldown" <<<"$advanced_out"
+grep -q "10. 兼容旧版 DNS 更新配置" <<<"$advanced_out"
 
 systemctl() { return 0; }
 need_root_unless_dry_run() { return 0; }

@@ -19,7 +19,7 @@ mkdir -p "$LEIKWAN_RUN_DIR"
 source "$ROOT_DIR/leikwan-toolkit.sh"
 
 main_out="$(print_main_menu_options)"
-grep -q "Leikwan Toolkit 1.4.4 LTS" <<<"$main_out"
+grep -q "Leikwan Toolkit 1.4.5 LTS" <<<"$main_out"
 grep -q "1. 快速组网" <<<"$main_out"
 grep -q "2. 利群主机 B" <<<"$main_out"
 grep -q "3. 公网入口 A" <<<"$main_out"
