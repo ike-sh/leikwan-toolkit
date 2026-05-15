@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-TOOL_VERSION="1.4.8"
+TOOL_VERSION="1.4.9"
 RELEASE_CHANNEL="LTS"
 PROJECT_NAME="leikwan-toolkit"
 PROJECT_TITLE="利群快速组网工具"
@@ -196,7 +196,16 @@ ENTRY_DDNS_INTERVAL_DEFAULT="5min"
 ENTRY_DDNS_IP_SOURCE_DEFAULT="auto"
 
 BBR_SYSCTL_CONF="/etc/sysctl.d/99-leikwan-bbr.conf"
-DNS_RESOLVED_CONF="/etc/systemd/resolved.conf.d/99-leikwan-dns.conf"
+SYSTEM_DNS_TARGET_CSV="${LEIKWAN_SYSTEM_DNS:-8.8.8.8,1.1.1.1}"
+SYSTEM_DNS_FALLBACK_SPACE="${LEIKWAN_SYSTEM_FALLBACK_DNS:-8.8.4.4 1.0.0.1}"
+SYSTEM_GAI_CONF="${LEIKWAN_GAI_CONF:-/etc/gai.conf}"
+SYSTEM_RESOLV_CONF="${LEIKWAN_RESOLV_CONF:-/etc/resolv.conf}"
+DNS_RESOLVED_CONF="${LEIKWAN_RESOLVED_CONF:-/etc/systemd/resolved.conf.d/99-leikwan-dns.conf}"
+IPV6_DISABLE_SYSCTL_CONF="${LEIKWAN_IPV6_DISABLE_CONF:-/etc/sysctl.d/99-leikwan-disable-ipv6.conf}"
+IPV6_PROC_CONF_DIR="${LEIKWAN_PROC_IPV6_CONF_DIR:-/proc/sys/net/ipv6/conf}"
+IPV6_NFT_LOCK_FILE="${NFT_DIR}/leikwan-ipv6-lockdown.nft"
+IPV6_NFT_SERVICE_NAME="leikwan-ipv6-lockdown"
+IPV6_NFT_SERVICE="${LEIKWAN_IPV6_NFT_SERVICE:-/etc/systemd/system/${IPV6_NFT_SERVICE_NAME}.service}"
 SHORTCUT_LQ="/usr/local/bin/lq"
 SHORTCUT_LQ_UPPER="/usr/local/bin/LQ"
 
@@ -704,6 +713,26 @@ normalize_entry_selector() {
   fi
 }
 
+backup_safe_name() {
+  local path="$1" safe
+  safe="${path#/}"
+  safe="${safe//\//__}"
+  printf '%s' "$safe"
+}
+
+latest_backup_for_file() {
+  local path="$1" safe latest
+  safe="$(backup_safe_name "$path")"
+  latest="$(find "$BACKUP_DIR" -maxdepth 1 -type f -name "${safe}.*.bak" -printf '%T@ %p\n' 2>/dev/null | sort -nr | awk 'NR==1 {sub(/^[^ ]+ /,""); print}' || true)"
+  [[ -n "$latest" ]] && printf '%s' "$latest"
+}
+
+latest_backup_any() {
+  local latest
+  latest="$(find "$BACKUP_DIR" -maxdepth 1 -type f -name '*.bak' -printf '%T@ %p\n' 2>/dev/null | sort -nr | awk 'NR==1 {sub(/^[^ ]+ /,""); print}' || true)"
+  [[ -n "$latest" ]] && printf '%s' "$latest" || printf '-'
+}
+
 backup_file() {
   local path="$1" safe dest
   [[ -e "$path" ]] || return 0
@@ -712,7 +741,7 @@ backup_file() {
     return 0
   fi
   mkdir -p "$BACKUP_DIR"
-  safe="${path#/}"; safe="${safe//\//__}"
+  safe="$(backup_safe_name "$path")"
   dest="${BACKUP_DIR}/${safe}.$(date '+%Y%m%d-%H%M%S').bak"
   cp -a "$path" "$dest"
   ok "已备份 ${path} -> ${dest}"
@@ -857,6 +886,12 @@ ${PROJECT_NAME} $(tool_version_label)
   sudo bash leikwan-toolkit.sh pair entry-join [pairing-file|-]
   sudo bash leikwan-toolkit.sh pair relay-join [pairing-file|-]
   sudo bash leikwan-toolkit.sh pair status
+  sudo bash leikwan-toolkit.sh system network status
+  sudo bash leikwan-toolkit.sh system network prepare
+  sudo bash leikwan-toolkit.sh system ipv4-prefer enable|disable|status
+  sudo bash leikwan-toolkit.sh system dns status|set 8.8.8.8,1.1.1.1|restore
+  sudo bash leikwan-toolkit.sh system ipv6 status|disable|restore|lockdown
+  sudo bash leikwan-toolkit.sh system bbr status|enable|restore
   sudo bash leikwan-toolkit.sh entry expose-range [--range 10000-19999] [--relay-ip 10.198.1.1]
   sudo bash leikwan-toolkit.sh entry ddns status|setup|run|enable|disable|logs
   sudo bash leikwan-toolkit.sh forward add
@@ -970,7 +1005,6 @@ package_command() {
     nftables) printf '%s' nft ;;
     netcat-openbsd) printf '%s' nc ;;
     dnsutils) printf '%s' dig ;;
-    iptables-persistent) printf '%s' ip6tables-save ;;
     ca-certificates) printf '%s' "" ;;
     coreutils) printf '%s' base64 ;;
     openssl) printf '%s' openssl ;;
@@ -2392,11 +2426,11 @@ get_latest_release_version() {
   [[ -n "$version" ]] && { printf '%s' "$version"; return 0; }
   if [[ "$mode" == "fast" ]]; then
     dl_warn "无法快速获取最新版本。"
-    dl_info "可直接选择“更新到最新版本”，或设置 LEIKWAN_TARGET_VERSION=1.4.8 后重试。"
+    dl_info "可直接选择“更新到最新版本”，或设置 LEIKWAN_TARGET_VERSION=1.4.9 后重试。"
     dl_info "如需完整探测，可设置 LEIKWAN_GITHUB_METADATA_MODE=full。"
   else
     dl_warn "无法获取最新版本。"
-    dl_info "可设置 LEIKWAN_TARGET_VERSION=1.4.8 后重试，或检查网络 / 镜像配置。"
+    dl_info "可设置 LEIKWAN_TARGET_VERSION=1.4.9 后重试，或检查网络 / 镜像配置。"
   fi
   return 1
 }
@@ -2617,7 +2651,7 @@ update_check() {
   latest_version="$(get_latest_release_version)" || return 1
   if [[ -z "$latest_version" ]]; then
     warn "无法快速获取最新版本。"
-    info "可直接选择“更新到最新版本”，或设置 LEIKWAN_TARGET_VERSION=1.4.8 后重试。"
+    info "可直接选择“更新到最新版本”，或设置 LEIKWAN_TARGET_VERSION=1.4.9 后重试。"
     info "如需完整探测，可设置 LEIKWAN_GITHUB_METADATA_MODE=full。"
     return 1
   fi
@@ -2739,12 +2773,12 @@ update_run() {
       [[ -n "$latest_version" ]] || { fail "LEIKWAN_TARGET_VERSION 无效：${LEIKWAN_TARGET_VERSION}"; exit 1; }
       tag="v${latest_version}"
     else
-      latest="$(update_latest_release)" || { dl_error "无法确定最新版本，已取消更新。"; dl_info "可设置 LEIKWAN_TARGET_VERSION=1.4.8 后重试。"; exit 1; }
+      latest="$(update_latest_release)" || { dl_error "无法确定最新版本，已取消更新。"; dl_info "可设置 LEIKWAN_TARGET_VERSION=1.4.9 后重试。"; exit 1; }
       IFS=$'\t' read -r tag latest_version <<<"$latest"
     fi
     if [[ -z "${latest_version:-}" ]] || ! release_version_from_tag "$latest_version" >/dev/null 2>&1; then
       dl_error "无法确定最新版本，已取消更新。"
-      dl_info "可设置 LEIKWAN_TARGET_VERSION=1.4.8 后重试。"
+      dl_info "可设置 LEIKWAN_TARGET_VERSION=1.4.9 后重试。"
       exit 1
     fi
     if [[ -z "${tag:-}" ]] || ! release_version_from_tag "$tag" >/dev/null 2>&1; then
@@ -3087,7 +3121,7 @@ download_easytier_archive() {
     printf '  %s\n' "${EASYTIER_DOWNLOAD_ATTEMPTS[@]}" >&2
   fi
   printf '%s\n' "解决方式：" >&2
-  printf '%s\n' "- 先执行 DNS / IPv4 优先修复" >&2
+  printf '%s\n' "- 先执行 lq system network prepare（IPv4 优先 + 国外 DNS）" >&2
   printf '%s\n' "- 设置 LEIKWAN_GITHUB_MIRRORS" >&2
   printf '%s\n' "- 手动下载 EasyTier tar.gz/tgz/zip 后输入本地路径" >&2
   printf '%s\n' "- 如果无法安装 unzip，请优先使用 tar.gz/tgz，或上传本地 easytier-core / easytier-cli 二进制" >&2
@@ -4482,6 +4516,7 @@ replace_forward_row() {
 quick_generate_network_pairing() {
   need_root_unless_dry_run
   ensure_base_dirs
+  system_network_prepare || true
   install_packages openssl coreutils
   local network_name network_secret suggested_name suggested_ip suggested_protocols suggested_proto suggested_port has_network=0
   local candidate_name candidate_ip candidate_proto candidate_port
@@ -4567,6 +4602,7 @@ quick_deploy_entry_from_network_pairing() {
   need_root_unless_dry_run
   ensure_base_dirs
   guard_entry_join_role || return 0
+  system_network_prepare || true
   local source="${1:-}" tmp role network_name network_secret relay_ip name et_ip proto port public_host detected service service_name legacy_proto
   tmp="$(mktemp)"
   read_pairing_code "$tmp" "B 利群主机" "-----END LEIKWAN EASYTIER NETWORK-----" "LEIKWAN_EASYTIER_NETWORK_BASE64" "$source" || { rm -f "$tmp"; return 1; }
@@ -10739,6 +10775,16 @@ doctor() {
   bbr_cc="$(sysctl -n net.ipv4.tcp_congestion_control 2>/dev/null || true)"
   bbr_qdisc="$(sysctl -n net.core.default_qdisc 2>/dev/null || true)"
   if [[ "$bbr_cc" == "bbr" && "$bbr_qdisc" == "fq" ]]; then report OK "BBR/fq enabled"; else report INFO "BBR=${bbr_cc:-unknown}, qdisc=${bbr_qdisc:-unknown}"; fi
+  if system_ipv4_prefer_enabled; then
+    report OK "IPv4 优先已启用"
+  else
+    report WARN "IPv4 优先未启用，建议执行：lq system network prepare"
+  fi
+  if system_dns_is_target; then
+    report OK "系统 DNS 已使用 Leikwan 推荐国外 DNS"
+  else
+    report INFO "当前系统 DNS 非 Leikwan 推荐国外 DNS，建议执行：lq system network prepare"
+  fi
   dnsutils_auto_install "doctor" "false" "plain" || true
   doctor_dependency_tools
   doctor_fake_ip_dns
@@ -10777,7 +10823,7 @@ doctor_auto_fix() {
   echo "- WARN: ${before_warn}"
   echo "- 整体状态: ${before_overall}"
   if (( DRY_RUN == 1 )); then
-    echo "[DRY-RUN] 将检查并修复 nft/MSS/route_table/relay service/DDNS timer/lq symlink/权限/stale locks"
+    echo "[DRY-RUN] 将检查并修复 系统网络预处理/nft/MSS/route_table/relay service/DDNS timer/lq symlink/权限/stale locks"
     LEIKWAN_BRIEF="$old_brief"
     LEIKWAN_COMPACT="$old_compact"
     return 0
@@ -10792,6 +10838,8 @@ doctor_auto_fix() {
   fi
   echo
   echo "执行修复："
+  info "doctor --auto-fix 正在执行系统网络预处理：IPv4 优先 + 国外 DNS。"
+  system_network_prepare || warn "doctor --auto-fix 的系统网络预处理未完全成功，请稍后到高级维护 -> 系统网络优化中检查。"
   lock_cleanup_stale_if_possible "$LEIKWAN_LOCK_PATH"
   lock_cleanup_stale_if_possible "$DDNS_LOCK_PATH"
   lock_cleanup_stale_if_possible "$UPDATE_LOCK_PATH"
@@ -11941,48 +11989,544 @@ run_doctor_interactive() {
   DOCTOR_INTERACTIVE_FIX="$old_doctor_interactive_fix"
 }
 
-fix_dns_ipv4_first() {
+ipv4_prefer_block() {
+  cat <<'EOF'
+# BEGIN LEIKWAN IPV4 PREFER
+precedence ::ffff:0:0/96  100
+# END LEIKWAN IPV4 PREFER
+EOF
+}
+
+strip_ipv4_prefer_block() {
+  [[ -f "$SYSTEM_GAI_CONF" ]] || return 0
+  awk '
+    /^# BEGIN LEIKWAN IPV4 PREFER$/ {skip=1; next}
+    /^# END LEIKWAN IPV4 PREFER$/ {skip=0; next}
+    !skip {print}
+  ' "$SYSTEM_GAI_CONF"
+}
+
+system_ipv4_prefer_managed() {
+  [[ -f "$SYSTEM_GAI_CONF" ]] || return 1
+  grep -q '^# BEGIN LEIKWAN IPV4 PREFER$' "$SYSTEM_GAI_CONF" 2>/dev/null &&
+    grep -q '^# END LEIKWAN IPV4 PREFER$' "$SYSTEM_GAI_CONF" 2>/dev/null
+}
+
+system_ipv4_prefer_enabled() {
+  [[ -f "$SYSTEM_GAI_CONF" ]] || return 1
+  grep -Eq '^[[:space:]]*precedence[[:space:]]+::ffff:0:0/96[[:space:]]+100([[:space:]]*)?$' "$SYSTEM_GAI_CONF" 2>/dev/null
+}
+
+system_ipv4_prefer_status() {
+  local enabled="disabled" managed="unmanaged"
+  system_ipv4_prefer_enabled && enabled="enabled"
+  system_ipv4_prefer_managed && managed="managed"
+  echo "IPv4 优先: ${enabled}"
+  echo "gai.conf: ${managed}"
+}
+
+system_ipv4_prefer_enable() {
   need_root_unless_dry_run
-  local gai_line
-  gai_line='precedence ::ffff:0:0/96  100'
-  backup_file /etc/gai.conf
-  if grep -q "$gai_line" /etc/gai.conf 2>/dev/null; then
-    ok "IPv4 优先规则已存在：/etc/gai.conf"
-  elif (( DRY_RUN == 1 )); then
-    echo "[DRY-RUN] 追加 ${gai_line} 到 /etc/gai.conf"
-  elif printf '%s\n' "$gai_line" >>/etc/gai.conf; then
-    ok "已启用 IPv4 优先：/etc/gai.conf"
-  else
-    warn "写入 /etc/gai.conf 失败，请检查文件权限。"
-    return 1
+  local content block
+  if system_ipv4_prefer_managed && system_ipv4_prefer_enabled; then
+    ok "IPv4 优先已启用。"
+    return 0
   fi
-  if command -v systemctl >/dev/null 2>&1 && systemctl list-unit-files --no-legend systemd-resolved.service 2>/dev/null | grep -q .; then
-    write_file "$DNS_RESOLVED_CONF" $'[Resolve]\nDNS=8.8.8.8 1.1.1.1 8.8.4.4\nFallbackDNS=9.9.9.9 223.5.5.5\nLLMNR=no\nMulticastDNS=no' 644
-    systemctl restart systemd-resolved 2>/dev/null || warn "systemd-resolved 重启失败，请稍后手动检查 DNS。"
+  content="$(strip_ipv4_prefer_block || true)"
+  block="$(ipv4_prefer_block)"
+  if [[ -n "$content" ]]; then
+    content="${content%$'\n'}"$'\n\n'"${block}"
   else
-    warn "未检测到 systemd-resolved，已仅处理 IPv4 优先规则。"
+    content="$block"
   fi
-  if command -v getent >/dev/null 2>&1 && getent ahosts raw.githubusercontent.com >/dev/null; then
-    ok "raw.githubusercontent.com 可解析"
+  write_file "$SYSTEM_GAI_CONF" "$content" 644 || return 1
+  ok "已开启 IPv4 优先。"
+}
+
+system_ipv4_prefer_disable() {
+  need_root_unless_dry_run
+  local content
+  if ! system_ipv4_prefer_managed; then
+    ok "IPv4 优先已关闭。"
+    return 0
+  fi
+  content="$(strip_ipv4_prefer_block || true)"
+  write_file "$SYSTEM_GAI_CONF" "$content" 644 || return 1
+  ok "已关闭 IPv4 优先。"
+}
+
+system_dns_validate_csv() {
+  local csv="$1" ip
+  local -a dns_items
+  csv="${csv//[[:space:]]/}"
+  [[ -n "$csv" ]] || return 1
+  IFS=',' read -r -a dns_items <<<"$csv"
+  (( ${#dns_items[@]} > 0 )) || return 1
+  for ip in "${dns_items[@]}"; do
+    is_ipv4 "$ip" || return 1
+  done
+}
+
+system_dns_csv_to_space() {
+  local csv="$1"
+  csv="${csv//,/ }"
+  printf '%s' "$csv"
+}
+
+system_dns_resolved_content() {
+  local dns_csv="${1:-$SYSTEM_DNS_TARGET_CSV}" dns_space
+  dns_space="$(system_dns_csv_to_space "$dns_csv")"
+  cat <<EOF
+[Resolve]
+DNS=${dns_space}
+FallbackDNS=${SYSTEM_DNS_FALLBACK_SPACE}
+LLMNR=no
+MulticastDNS=no
+EOF
+}
+
+systemd_resolved_state() {
+  if ! command -v systemctl >/dev/null 2>&1; then
+    printf 'missing'
+    return 0
+  fi
+  if systemctl is-active --quiet systemd-resolved 2>/dev/null; then
+    printf 'active'
+  elif systemctl list-unit-files --no-legend systemd-resolved.service 2>/dev/null | grep -q .; then
+    printf 'inactive'
   else
-    warn "raw.githubusercontent.com 解析失败"
+    printf 'missing'
   fi
 }
 
-ipv6_lockdown() {
+resolv_conf_type() {
+  if [[ -L "$SYSTEM_RESOLV_CONF" ]]; then
+    printf 'symlink'
+  elif [[ -f "$SYSTEM_RESOLV_CONF" ]]; then
+    printf 'file'
+  else
+    printf 'unknown'
+  fi
+}
+
+system_dns_current_csv() {
+  local state line
+  state="$(systemd_resolved_state)"
+  if [[ "$state" == "active" && -f "$DNS_RESOLVED_CONF" ]]; then
+    line="$(awk -F= '/^[[:space:]]*DNS[[:space:]]*=/{gsub(/^[[:space:]]+|[[:space:]]+$/, "", $2); gsub(/[[:space:]]+/, ",", $2); print $2; exit}' "$DNS_RESOLVED_CONF" 2>/dev/null || true)"
+    [[ -n "$line" ]] && { printf '%s' "$line"; return 0; }
+  fi
+  if [[ -f "$SYSTEM_RESOLV_CONF" && ! -L "$SYSTEM_RESOLV_CONF" ]]; then
+    awk '$1=="nameserver" && $2 ~ /^[0-9.]+$/ {if (out=="") out=$2; else out=out "," $2} END{print out}' "$SYSTEM_RESOLV_CONF" 2>/dev/null
+    return 0
+  fi
+  printf '-'
+}
+
+system_dns_config_state() {
+  if [[ -f "$DNS_RESOLVED_CONF" ]]; then
+    printf 'managed'
+  elif [[ -f "$SYSTEM_RESOLV_CONF" && ! -L "$SYSTEM_RESOLV_CONF" ]] && grep -q '^# Managed by leikwan-toolkit system DNS$' "$SYSTEM_RESOLV_CONF" 2>/dev/null; then
+    printf 'managed'
+  else
+    printf 'unmanaged'
+  fi
+}
+
+system_dns_is_target() {
+  [[ "$(system_dns_current_csv)" == "$SYSTEM_DNS_TARGET_CSV" ]]
+}
+
+system_dns_status() {
+  echo "系统 DNS: $(system_dns_current_csv)"
+  echo "systemd-resolved: $(systemd_resolved_state)"
+  echo "resolv.conf: $(resolv_conf_type)"
+  echo "DNS 配置: $(system_dns_config_state)"
+}
+
+system_dns_set() {
   need_root_unless_dry_run
-  install_packages iptables-persistent
-  ip6tables -N V6_LOCKDOWN 2>/dev/null || true
-  ip6tables -F V6_LOCKDOWN
-  ip6tables -A V6_LOCKDOWN -i lo -j ACCEPT
-  ip6tables -A V6_LOCKDOWN -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
-  ip6tables -A V6_LOCKDOWN -p ipv6-icmp -j ACCEPT
-  ip6tables -A V6_LOCKDOWN -p tcp --dport 22 -j ACCEPT
-  ip6tables -A V6_LOCKDOWN -j DROP
-  ip6tables -C INPUT -j V6_LOCKDOWN 2>/dev/null || ip6tables -I INPUT -j V6_LOCKDOWN
-  mkdir -p /etc/iptables
-  ip6tables-save >/etc/iptables/rules.v6
-  ok "IPv6 入站已收口。"
+  local dns_csv="${1:-$SYSTEM_DNS_TARGET_CSV}" state content
+  dns_csv="${dns_csv//[[:space:]]/}"
+  system_dns_validate_csv "$dns_csv" || { fail "系统 DNS 格式无效：${dns_csv}"; return 1; }
+  if system_dns_is_target; then
+    ok "系统 DNS 已是目标配置。"
+    return 0
+  fi
+  state="$(systemd_resolved_state)"
+  case "$state" in
+    active)
+      write_file "$DNS_RESOLVED_CONF" "$(system_dns_resolved_content "$dns_csv")" 644 || return 1
+      if (( DRY_RUN == 1 )); then
+        echo "[DRY-RUN] systemctl restart systemd-resolved"
+      else
+        systemctl restart systemd-resolved 2>/dev/null || warn "systemd-resolved 重启失败，请稍后手动检查系统 DNS。"
+      fi
+      ok "已设置系统 DNS：${dns_csv}"
+      ;;
+    inactive|missing)
+      if [[ -L "$SYSTEM_RESOLV_CONF" ]]; then
+        warn "resolv.conf 是符号链接且 systemd-resolved 未处于 active，未硬改系统 DNS。"
+        return 1
+      fi
+      content="# Managed by leikwan-toolkit system DNS"
+      while IFS= read -r ip; do
+        [[ -n "$ip" ]] && content="${content}"$'\n'"nameserver ${ip}"
+      done < <(tr ',' '\n' <<<"$dns_csv")
+      write_file "$SYSTEM_RESOLV_CONF" "$content" 644 || return 1
+      ok "已设置系统 DNS：${dns_csv}"
+      ;;
+  esac
+}
+
+system_dns_set_default_foreign() {
+  system_dns_set "$SYSTEM_DNS_TARGET_CSV"
+}
+
+system_dns_restore() {
+  need_root_unless_dry_run
+  local latest state restored=0
+  if [[ -f "$DNS_RESOLVED_CONF" ]]; then
+    backup_file "$DNS_RESOLVED_CONF"
+    if (( DRY_RUN == 1 )); then
+      echo "[DRY-RUN] 删除 ${DNS_RESOLVED_CONF}"
+    else
+      rm -f "$DNS_RESOLVED_CONF"
+    fi
+    restored=1
+  fi
+  state="$(systemd_resolved_state)"
+  if [[ "$state" == "active" ]]; then
+    if (( DRY_RUN == 1 )); then
+      echo "[DRY-RUN] systemctl restart systemd-resolved"
+    else
+      systemctl restart systemd-resolved 2>/dev/null || warn "systemd-resolved 重启失败，请稍后手动检查系统 DNS。"
+    fi
+  fi
+  if [[ -f "$SYSTEM_RESOLV_CONF" && ! -L "$SYSTEM_RESOLV_CONF" ]] && grep -q '^# Managed by leikwan-toolkit system DNS$' "$SYSTEM_RESOLV_CONF" 2>/dev/null; then
+    latest="$(latest_backup_for_file "$SYSTEM_RESOLV_CONF" || true)"
+    if [[ -n "$latest" && -f "$latest" ]]; then
+      backup_file "$SYSTEM_RESOLV_CONF"
+      if (( DRY_RUN == 1 )); then
+        echo "[DRY-RUN] 恢复 ${SYSTEM_RESOLV_CONF} <- ${latest}"
+      else
+        cp -a "$latest" "$SYSTEM_RESOLV_CONF"
+      fi
+      restored=1
+    else
+      warn "未找到 ${SYSTEM_RESOLV_CONF} 的备份，保留当前文件，请按需手动恢复。"
+    fi
+  fi
+  (( restored == 1 )) && ok "系统 DNS 已恢复。" || ok "未发现脚本托管的系统 DNS 配置。"
+}
+
+system_ipv6_value() {
+  local scope="$1" file
+  file="${IPV6_PROC_CONF_DIR}/${scope}/disable_ipv6"
+  [[ -r "$file" ]] && tr -d '[:space:]' <"$file" || printf 'unknown'
+}
+
+system_ipv6_summary() {
+  local all default lo
+  all="$(system_ipv6_value all)"
+  default="$(system_ipv6_value default)"
+  lo="$(system_ipv6_value lo)"
+  if [[ "$all" == "1" && "$default" == "1" && "$lo" == "1" ]]; then
+    printf 'disabled'
+  elif [[ "$all" == "0" && "$default" == "0" && "$lo" == "0" ]]; then
+    printf 'enabled'
+  else
+    printf 'partial'
+  fi
+}
+
+system_ipv6_config_state() {
+  [[ -f "$IPV6_DISABLE_SYSCTL_CONF" ]] && printf 'managed' || printf 'unmanaged'
+}
+
+system_ipv6_conflicts() {
+  local paths=() p
+  if [[ -n "${LEIKWAN_SYSCTL_DIRS:-}" ]]; then
+    IFS=',' read -r -a paths <<<"$LEIKWAN_SYSCTL_DIRS"
+  else
+    paths=(/etc/sysctl.conf /etc/sysctl.d)
+  fi
+  for p in "${paths[@]}"; do
+    [[ -e "$p" ]] || continue
+    grep -RHE '^[[:space:]]*net\.ipv6\.conf\..*\.disable_ipv6[[:space:]]*=[[:space:]]*0([[:space:]]*)?$' "$p" 2>/dev/null | grep -vF "$IPV6_DISABLE_SYSCTL_CONF" || true
+  done
+}
+
+system_ipv6_status() {
+  echo "IPv6: $(system_ipv6_summary)"
+  echo "IPv6 sysctl: all=$(system_ipv6_value all) default=$(system_ipv6_value default) lo=$(system_ipv6_value lo)"
+  echo "IPv6 配置: $(system_ipv6_config_state)"
+}
+
+system_ipv6_disable() {
+  need_root_unless_dry_run
+  local conflicts summary
+  conflicts="$(system_ipv6_conflicts || true)"
+  if [[ -n "$conflicts" ]]; then
+    warn "检测到其他 sysctl 配置含 disable_ipv6=0，未修改用户文件；如需处理请在高级维护中确认。"
+    printf '%s\n' "$conflicts" | sed -n '1,5p'
+  fi
+  write_file "$IPV6_DISABLE_SYSCTL_CONF" $'# Managed by leikwan-toolkit\nnet.ipv6.conf.all.disable_ipv6=1\nnet.ipv6.conf.default.disable_ipv6=1\nnet.ipv6.conf.lo.disable_ipv6=1' 644 || return 1
+  if (( DRY_RUN == 1 )); then
+    echo "[DRY-RUN] sysctl -p ${IPV6_DISABLE_SYSCTL_CONF}"
+    ok "IPv6 已禁用。"
+    return 0
+  fi
+  if command -v sysctl >/dev/null 2>&1; then
+    sysctl -p "$IPV6_DISABLE_SYSCTL_CONF" >/dev/null 2>&1 || sysctl --system >/dev/null 2>&1 || true
+  fi
+  summary="$(system_ipv6_summary)"
+  if [[ "$summary" == "disabled" ]]; then
+    ok "IPv6 已禁用。"
+  else
+    warn "IPv6 禁用可能需要重启后完全生效。"
+  fi
+}
+
+system_ipv6_restore() {
+  need_root_unless_dry_run
+  if [[ -f "$IPV6_DISABLE_SYSCTL_CONF" ]]; then
+    backup_file "$IPV6_DISABLE_SYSCTL_CONF"
+    if (( DRY_RUN == 1 )); then
+      echo "[DRY-RUN] 删除 ${IPV6_DISABLE_SYSCTL_CONF}"
+    else
+      rm -f "$IPV6_DISABLE_SYSCTL_CONF"
+    fi
+  fi
+  if (( DRY_RUN == 1 )); then
+    echo "[DRY-RUN] sysctl --system"
+    echo "[DRY-RUN] sysctl -w net.ipv6.conf.all.disable_ipv6=0 net.ipv6.conf.default.disable_ipv6=0 net.ipv6.conf.lo.disable_ipv6=0"
+    ok "IPv6 已恢复。"
+    return 0
+  fi
+  if command -v sysctl >/dev/null 2>&1; then
+    sysctl --system >/dev/null 2>&1 || true
+    sysctl -w net.ipv6.conf.all.disable_ipv6=0 net.ipv6.conf.default.disable_ipv6=0 net.ipv6.conf.lo.disable_ipv6=0 >/dev/null 2>&1 || true
+  fi
+  if [[ "$(system_ipv6_summary)" == "enabled" ]]; then
+    ok "IPv6 已恢复。"
+  else
+    warn "IPv6 可能被其他 sysctl 配置禁用，请检查冲突项或重启系统。"
+  fi
+}
+
+ipv6_nft_lockdown_content() {
+  cat <<'EOF'
+table inet leikwan_ipv6_lockdown {
+  chain input {
+    type filter hook input priority filter; policy accept;
+
+    ip6 nexthdr ipv6-icmp accept
+    iif lo accept
+    ct state established,related accept
+    tcp dport 22 accept
+
+    meta nfproto ipv6 drop
+  }
+}
+EOF
+}
+
+ipv6_nft_lockdown_service_content() {
+  local nft_bin
+  nft_bin="$(command -v nft 2>/dev/null || printf '/usr/sbin/nft')"
+  cat <<EOF
+[Unit]
+Description=Leikwan IPv6 inbound lockdown nftables
+After=network-online.target nftables.service
+
+[Service]
+Type=oneshot
+ExecStart=${nft_bin} -f ${IPV6_NFT_LOCK_FILE}
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
+EOF
+}
+
+ipv6_nft_lockdown_status() {
+  if command -v nft >/dev/null 2>&1 && nft list table inet leikwan_ipv6_lockdown >/dev/null 2>&1; then
+    printf 'enabled'
+  elif [[ -f "$IPV6_NFT_LOCK_FILE" ]]; then
+    printf 'enabled'
+  else
+    printf 'disabled'
+  fi
+}
+
+ipv6_nft_lockdown() {
+  need_root_unless_dry_run
+  install_packages nftables
+  write_file "$IPV6_NFT_LOCK_FILE" "$(ipv6_nft_lockdown_content)" 644 || return 1
+  write_file "$IPV6_NFT_SERVICE" "$(ipv6_nft_lockdown_service_content)" 644 || return 1
+  if (( DRY_RUN == 1 )); then
+    echo "[DRY-RUN] nft -f ${IPV6_NFT_LOCK_FILE}"
+    ok "IPv6 入站收口 nftables 已应用。"
+    info "这不是禁用 IPv6，只是限制 IPv6 入站访问。"
+    return 0
+  fi
+  if ! command -v nft >/dev/null 2>&1; then
+    fail "未找到 nft 命令，无法应用 IPv6 入站收口。"
+    return 1
+  fi
+  if ! nft -f "$IPV6_NFT_LOCK_FILE"; then
+    nft delete table inet leikwan_ipv6_lockdown >/dev/null 2>&1 || true
+    warn "IPv6 入站收口 nftables 应用失败，已尝试回滚。"
+    return 1
+  fi
+  if command -v systemctl >/dev/null 2>&1; then
+    systemctl daemon-reload 2>/dev/null || true
+    systemctl enable "$IPV6_NFT_SERVICE_NAME" >/dev/null 2>&1 || true
+  fi
+  ok "IPv6 入站收口 nftables 已应用。"
+  info "这不是禁用 IPv6，只是限制 IPv6 入站访问。"
+}
+
+ipv6_lockdown() {
+  ipv6_nft_lockdown
+}
+
+system_bbr_status() {
+  echo "BBR: $(sysctl -n net.ipv4.tcp_congestion_control 2>/dev/null || printf 'unknown')"
+  echo "qdisc: $(sysctl -n net.core.default_qdisc 2>/dev/null || printf 'unknown')"
+}
+
+system_bbr_enable() {
+  need_root_unless_dry_run
+  write_file "$BBR_SYSCTL_CONF" $'net.core.default_qdisc=fq\nnet.ipv4.tcp_congestion_control=bbr' 644 || return 1
+  if (( DRY_RUN == 1 )); then
+    echo "[DRY-RUN] modprobe tcp_bbr"
+    echo "[DRY-RUN] sysctl --system"
+    ok "已启用 BBR + fq。"
+    return 0
+  fi
+  modprobe tcp_bbr 2>/dev/null || true
+  sysctl --system >/dev/null 2>&1 || true
+  ok "已启用 BBR + fq。"
+}
+
+system_bbr_restore() {
+  need_root_unless_dry_run
+  backup_file "$BBR_SYSCTL_CONF"
+  if (( DRY_RUN == 1 )); then
+    echo "[DRY-RUN] 删除 ${BBR_SYSCTL_CONF}"
+    echo "[DRY-RUN] sysctl --system"
+    ok "已恢复 BBR / qdisc 默认配置。"
+    return 0
+  fi
+  rm -f "$BBR_SYSCTL_CONF"
+  sysctl --system >/dev/null 2>&1 || true
+  ok "已恢复 BBR / qdisc 默认配置。"
+}
+
+system_network_status() {
+  echo "系统网络优化状态"
+  echo "----------------------------------------"
+  system_ipv4_prefer_status
+  system_dns_status
+  system_ipv6_status
+  echo "IPv6 入站收口: nftables $(ipv6_nft_lockdown_status)"
+  system_bbr_status
+  echo "最近备份: $(latest_backup_any || printf '-')"
+}
+
+system_network_prepare() {
+  local rc=0
+  info "正在执行系统网络预处理：IPv4 优先 + 国外 DNS。"
+  system_ipv4_prefer_enable || rc=1
+  system_dns_set_default_foreign || rc=1
+  if (( rc != 0 )); then
+    warn "系统网络预处理失败，GitHub / EasyTier / DNS 解析可能受影响。"
+    return "$rc"
+  fi
+  return 0
+}
+
+fix_dns_ipv4_first() {
+  system_network_prepare
+}
+
+system_ipv4_prefer_menu() {
+  local choice
+  system_ipv4_prefer_status
+  echo "1. 开启 IPv4 优先"
+  echo "2. 关闭 IPv4 优先"
+  echo "0. 返回"
+  choice="$(prompt_menu_choice "请选择：")"
+  case "$choice" in
+    1) system_ipv4_prefer_enable ;;
+    2) system_ipv4_prefer_disable ;;
+    0|"") return 0 ;;
+    *) menu_invalid_choice ;;
+  esac
+}
+
+system_dns_menu() {
+  local choice dns
+  system_dns_status
+  echo "1. 设置系统 DNS：${SYSTEM_DNS_TARGET_CSV}"
+  echo "2. 自定义系统 DNS"
+  echo "3. 恢复系统 DNS"
+  echo "0. 返回"
+  choice="$(prompt_menu_choice "请选择：")"
+  case "$choice" in
+    1) system_dns_set_default_foreign ;;
+    2) dns="$(prompt_value "系统 DNS，逗号分隔" "$SYSTEM_DNS_TARGET_CSV")"; system_dns_set "$dns" ;;
+    3) system_dns_restore ;;
+    0|"") return 0 ;;
+    *) menu_invalid_choice ;;
+  esac
+}
+
+system_ipv6_menu() {
+  local choice
+  system_ipv6_status
+  echo "1. 禁用 IPv6（sysctl）"
+  echo "2. 恢复 IPv6（sysctl）"
+  echo "0. 返回"
+  choice="$(prompt_menu_choice "请选择：")"
+  case "$choice" in
+    1) system_ipv6_disable ;;
+    2) system_ipv6_restore ;;
+    0|"") return 0 ;;
+    *) menu_invalid_choice ;;
+  esac
+}
+
+print_system_network_menu_options() {
+  print_menu_header "系统网络优化"
+  echo "1. 查看系统网络优化状态"
+  echo "2. IPv4 优先：开启 / 关闭"
+  echo "3. DNS 服务器：设置 / 恢复"
+  echo "4. IPv6：禁用 / 恢复"
+  echo "5. BBR / fq：开启 / 恢复"
+  echo "6. IPv6 入站收口 nftables"
+  echo "0. 返回"
+}
+
+system_network_menu() {
+  local choice
+  while true; do
+    print_system_network_menu_options
+    choice="$(prompt_menu_choice "请选择：")"
+    case "$choice" in
+      1) run_menu_action_pause system_network_status ;;
+      2) run_menu_action_pause system_ipv4_prefer_menu ;;
+      3) run_menu_action_pause system_dns_menu ;;
+      4) run_menu_action_pause system_ipv6_menu ;;
+      5) bbr_menu ;;
+      6) run_menu_action_pause ipv6_nft_lockdown ;;
+      0) return 0 ;;
+      "") menu_input_required ;;
+      *) menu_invalid_choice ;;
+    esac
+  done
 }
 
 bbr_menu() {
@@ -11992,9 +12536,9 @@ bbr_menu() {
     echo "1. 查看状态"; echo "2. 启用 BBR + fq"; echo "3. 恢复默认"; echo "0. 返回"
     choice="$(prompt_menu_choice "请选择：")"
     case "$choice" in
-      1) sysctl net.ipv4.tcp_congestion_control net.core.default_qdisc 2>/dev/null || true; pause_after_action ;;
-      2) write_file "$BBR_SYSCTL_CONF" $'net.core.default_qdisc=fq\nnet.ipv4.tcp_congestion_control=bbr' 644; modprobe tcp_bbr 2>/dev/null || true; sysctl --system; pause_after_action ;;
-      3) backup_file "$BBR_SYSCTL_CONF"; rm -f "$BBR_SYSCTL_CONF"; sysctl --system; pause_after_action ;;
+      1) system_bbr_status; pause_after_action ;;
+      2) system_bbr_enable; pause_after_action ;;
+      3) system_bbr_restore; pause_after_action ;;
       0) return 0 ;;
     esac
   done
@@ -12909,9 +13453,13 @@ print_quick_networking_steps() {
   cat <<'EOF'
 快速组网详细说明
 ----------------------------------------
-步骤 0：利群主机先修复 DNS / IPv4 优先
-在 B 利群主机执行：
-主菜单 -> 快速组网 -> 1
+快速组网会自动执行系统网络预处理：
+- 开启 IPv4 优先
+- 设置系统 DNS 为 8.8.8.8 / 1.1.1.1
+
+如果不希望系统 DNS 被脚本管理，可在完成组网后到：
+高级维护 -> 系统网络优化 -> DNS 服务器：设置 / 恢复
+中恢复。
 
 步骤 1：利群主机生成网络码
 在 B 利群主机执行：
@@ -12985,6 +13533,11 @@ quick_networking_menu() {
     echo "A：公网入口，负责接入公网流量"
     echo "C：后端目标，最终访问的服务"
     echo
+    info "快速组网会自动执行系统网络预处理："
+    echo "- 开启 IPv4 优先"
+    echo "- 设置系统 DNS 为 8.8.8.8 / 1.1.1.1"
+    echo "如不希望系统 DNS 被脚本管理，可在高级维护 -> 系统网络优化中恢复。"
+    echo
     echo "1. B：初始化利群主机"
     echo "2. B：生成公网入口接入码"
     echo "3. A：粘贴接入码并部署入口"
@@ -13025,7 +13578,7 @@ init_plan() {
   echo "已有配置: entries=${entries_count} forwards=${forwards_count} pbr=${pbr_count}"
   echo "将执行:"
   echo "[1] 环境预检"
-  echo "[2] 检查 DNS / IPv4"
+  echo "[2] 自动执行系统网络预处理（IPv4 优先 + 8.8.8.8 / 1.1.1.1）"
   echo "[3] 安装依赖 curl jq tar unzip nftables"
   echo "[4] 安装 / 修复 EasyTier"
   echo "[5] 生成或粘贴公网入口接入码"
@@ -13064,6 +13617,7 @@ init_step_action() {
 init_relay_wizard() {
   local choice entries_count forwards_count pbr_count
   ensure_role_or_warn leikwan-relay || return 0
+  system_network_prepare || true
   while true; do
     entries_count="$(entries_rows | awk 'END{print NR+0}')"
     forwards_count="$(forwards_rows | awk 'END{print NR+0}')"
@@ -13074,7 +13628,7 @@ init_relay_wizard() {
       info "将进入维护模式，不会重新初始化 network.env。"
     fi
     echo "1. 环境预检"
-    echo "2. 修复 DNS / IPv4 优先"
+    echo "2. 系统网络预处理（IPv4 优先 + 国外 DNS）"
     echo "3. 安装 / 修复 EasyTier"
     echo "4. 生成第一个公网入口接入码"
     echo "5. 添加后端转发目标"
@@ -13086,7 +13640,7 @@ init_relay_wizard() {
     choice="$(prompt_menu_choice "请选择：")"
     case "$choice" in
       1) init_step_action "将读取当前配置、端口和状态，不修改系统。" status_overview ;;
-      2) init_step_action "将检查并修复 DNS / IPv4 优先配置，执行前会确认。" fix_dns_ipv4_first ;;
+      2) init_step_action "将执行系统网络预处理：IPv4 优先 + 国外 DNS。" system_network_prepare ;;
       3) init_step_action "将安装或修复 EasyTier 二进制，执行前会确认下载来源。" install_easytier_binary repair ;;
       4) init_step_action "将复用现有 network name / secret 生成公网入口接入码，不覆盖 network.env。" quick_generate_network_pairing ;;
       5) init_step_action "将添加后端转发目标，端口冲突会被预检拦截。" add_forward ;;
@@ -13373,7 +13927,8 @@ print_advanced_menu_options() {
     echo "4. 自更新"
     echo "5. 端点输出"
     echo "6. 调试报告"
-    echo "7. 卸载"
+    echo "7. 系统网络优化"
+    echo "8. 卸载"
     echo "0. 返回"
 }
 
@@ -13389,7 +13944,8 @@ advanced_menu() {
       4) update_menu ;;
       5) endpoint_output_menu ;;
       6) run_menu_action_pause generate_debug_report ;;
-      7) uninstall_new_mode ;;
+      7) system_network_menu ;;
+      8) uninstall_new_mode ;;
       0) return 0 ;;
       "") menu_input_required ;;
       *) menu_invalid_choice ;;
@@ -13507,6 +14063,51 @@ main() {
         relay-join) quick_deploy_relay_from_entry_pairing "${3:-}" ;;
         status) pairing_status ;;
         *) fail "未知 pair 子命令：${2:-}"; print_help; exit 1 ;;
+      esac
+      ;;
+    system)
+      case "${2:-}" in
+        network)
+          case "${3:-}" in
+            status) run_cli_action system_network_status ;;
+            prepare) run_cli_action system_network_prepare ;;
+            *) fail "未知 system network 子命令：${3:-}"; print_help; exit 1 ;;
+          esac
+          ;;
+        ipv4-prefer)
+          case "${3:-}" in
+            status) run_cli_action system_ipv4_prefer_status ;;
+            enable) run_cli_action system_ipv4_prefer_enable ;;
+            disable) run_cli_action system_ipv4_prefer_disable ;;
+            *) fail "未知 system ipv4-prefer 子命令：${3:-}"; print_help; exit 1 ;;
+          esac
+          ;;
+        dns)
+          case "${3:-}" in
+            status) run_cli_action system_dns_status ;;
+            set) run_cli_action system_dns_set "${4:-$SYSTEM_DNS_TARGET_CSV}" ;;
+            restore) run_cli_action system_dns_restore ;;
+            *) fail "未知 system dns 子命令：${3:-}"; print_help; exit 1 ;;
+          esac
+          ;;
+        ipv6)
+          case "${3:-}" in
+            status) run_cli_action system_ipv6_status ;;
+            disable) run_cli_action system_ipv6_disable ;;
+            restore) run_cli_action system_ipv6_restore ;;
+            lockdown) run_cli_action ipv6_nft_lockdown ;;
+            *) fail "未知 system ipv6 子命令：${3:-}"; print_help; exit 1 ;;
+          esac
+          ;;
+        bbr)
+          case "${3:-}" in
+            status) run_cli_action system_bbr_status ;;
+            enable) run_cli_action system_bbr_enable ;;
+            restore) run_cli_action system_bbr_restore ;;
+            *) fail "未知 system bbr 子命令：${3:-}"; print_help; exit 1 ;;
+          esac
+          ;;
+        *) fail "未知 system 子命令：${2:-}"; print_help; exit 1 ;;
       esac
       ;;
     forward)

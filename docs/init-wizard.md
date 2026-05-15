@@ -35,7 +35,7 @@ B 利群主机负责 EasyTier relay、entries、forwards、PBR、DDNS 和 nftabl
 B 向导聚合这些步骤：
 
 1. 环境预检
-2. 修复 DNS / IPv4 优先
+2. 自动执行系统网络预处理（IPv4 优先 + `8.8.8.8` / `1.1.1.1` 系统 DNS）
 3. 安装 / 修复 EasyTier
 4. 生成第一个公网入口接入码
 5. 添加后端转发目标
@@ -44,6 +44,8 @@ B 向导聚合这些步骤：
 8. 查看状态总览
 
 如果检测到已有 entries / forwards / pbr、DDNS 配置或 network.env，向导会进入维护模式，不会重新初始化 network.env。生成公网入口接入码会复用现有 network name / secret。
+
+系统网络预处理会备份后修改系统配置。系统 DNS 与 DDNS 多 DNS 解析器是两套配置；如果不希望脚本管理整机 DNS，可到“高级维护 -> 系统网络优化 -> DNS 服务器：设置 / 恢复”中恢复。
 
 ## A 公网入口
 

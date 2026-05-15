@@ -41,6 +41,27 @@ bash tests/final-menu-regression.sh
 section "final README regression"
 bash tests/final-readme-regression.sh
 
+section "system network menu regression"
+bash tests/system-network-menu-regression.sh
+
+section "quickstart network prepare regression"
+bash tests/quickstart-network-prepare-regression.sh
+
+section "IPv4 prefer regression"
+bash tests/ipv4-prefer-regression.sh
+
+section "DNS config regression"
+bash tests/dns-config-regression.sh
+
+section "IPv6 disable / restore regression"
+bash tests/ipv6-disable-restore-regression.sh
+
+section "IPv6 nft lockdown regression"
+bash tests/ipv6-nft-lockdown-regression.sh
+
+section "system network CLI regression"
+bash tests/system-network-cli-regression.sh
+
 section "role detection regression"
 bash tests/role-detection-regression.sh
 

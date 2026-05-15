@@ -1,6 +1,6 @@
 # 状态输出
 
-Leikwan Toolkit 1.4.1 对 `lq status` 做了稳定化整理，目标是让日常巡检像正式运维系统一样可读、可脚本化、不会误报角色。
+Leikwan Toolkit 1.4.9 对 `lq status` 做了稳定化整理，目标是让日常巡检像正式运维系统一样可读、可脚本化、不会误报角色。
 
 ## 常用命令
 
@@ -119,3 +119,13 @@ JSON 输出包含 `entry_ddns_enabled`、`entry_ddns_host`、`entry_ddns_public_
 ```
 
 只有 enabled 项发生端口冲突、nft 缺失或监听异常时才会 WARN。
+
+## 系统网络优化状态
+
+系统网络优化状态通过独立入口查看：
+
+```bash
+lq system network status
+```
+
+输出包含 IPv4 优先、系统 DNS、systemd-resolved、resolv.conf、IPv6 sysctl、IPv6 入站收口 nftables、BBR 和 qdisc 状态。系统 DNS 推荐值固定为 `8.8.8.8` / `1.1.1.1`，它影响整机解析；DDNS 多 DNS 解析器只影响域名变化检测。

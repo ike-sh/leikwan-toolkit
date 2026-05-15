@@ -84,6 +84,34 @@ relay 重启后 easytier-cli 的 peer 列表可能短时间未刷新。脚本会
 
 `jq` 只用于读取 GitHub release metadata。bootstrap 会尝试通过 apt / apt-get 自动安装 jq；安装失败只 WARN，不中断工具安装。如果 EasyTier 已安装，缺少 `jq` 不影响当前组网运行。
 
+## 系统网络优化
+
+1.4.9 起，快速组网会在 B 利群主机初始化和 A 公网入口部署前自动执行系统网络预处理：
+
+- 开启 IPv4 优先。
+- 设置系统 DNS 为 `8.8.8.8` / `1.1.1.1`。
+
+手动入口：
+
+```text
+高级维护 -> 系统网络优化
+```
+
+CLI：
+
+```bash
+lq system network status
+lq system network prepare
+lq system dns restore
+lq system ipv6 disable
+lq system ipv6 restore
+lq system ipv6 lockdown
+```
+
+脚本写入系统配置前会备份。系统 DNS 影响整机解析；DDNS 多 DNS 解析器只影响 DDNS 域名变化检测，不会被 `lq system dns` 修改。
+
+IPv6 禁用 / 恢复使用 sysctl 文件 `/etc/sysctl.d/99-leikwan-disable-ipv6.conf`。IPv6 入站收口使用 nftables，只限制 IPv6 入站访问，不是禁用 IPv6。
+
 ## EasyTier 下载
 
 1.4.8 起，GitHub 大文件下载默认继续使用 `LEIKWAN_GITHUB_DOWNLOAD_MODE=mirror-first`：先尝试镜像池，再把官方 GitHub 作为最后兜底。需要改回官方优先时设置：
@@ -118,14 +146,14 @@ EasyTier 成功下载的安装包会缓存到：
 
 ```text
 [WARN] 无法快速获取最新版本。
-[INFO] 可直接选择“更新到最新版本”，或设置 LEIKWAN_TARGET_VERSION=1.4.8 后重试。
+[INFO] 可直接选择“更新到最新版本”，或设置 LEIKWAN_TARGET_VERSION=1.4.9 后重试。
 [INFO] 如需完整探测，可设置 LEIKWAN_GITHUB_METADATA_MODE=full。
 ```
 
 这时不会输出空的“最新版本”，也不会构造空版本下载 URL。可检查网络，或在确认版本号后使用：
 
 ```bash
-export LEIKWAN_TARGET_VERSION=1.4.8
+export LEIKWAN_TARGET_VERSION=1.4.9
 lq update run
 ```
 

@@ -58,7 +58,7 @@ export LEIKWAN_GITHUB_DOWNLOAD_MODE=origin-first
 
 如果下载仍失败：
 
-1. 先执行 `DNS / IPv4 优先修复`。
+1. 先执行 `lq system network prepare`，快速组网也会自动执行这一步。
 2. 设置 `LEIKWAN_GITHUB_MIRRORS` 指定你可用的镜像。
 3. 手动下载 EasyTier zip 后，在安装器提示时输入本地路径。
 

@@ -1,6 +1,6 @@
 # Leikwan Toolkit
 
-Leikwan Toolkit `1.4.8 LTS` is the Shell LTS line for local TCP/UDP forwarding, EasyTier relay / entry setup, nftables, IPv4 PBR, snapshots, status, doctor, and DDNS domain-resolution refresh.
+Leikwan Toolkit `1.4.9 LTS` is the Shell LTS line for local TCP/UDP forwarding, EasyTier relay / entry setup, nftables, IPv4 PBR, snapshots, status, doctor, and DDNS domain-resolution refresh.
 
 当前仓库只维护 Shell LTS：
 
@@ -45,8 +45,39 @@ lq forward apply-relay --auto-fix-route
 
 ```bash
 lq --version
-# leikwan-toolkit 1.4.8 LTS
+# leikwan-toolkit 1.4.9 LTS
 ```
+
+## 快速组网系统网络预处理
+
+快速组网在 B 利群主机初始化和 A 公网入口部署前，会自动执行系统网络预处理：
+
+- 开启 IPv4 优先，托管 `/etc/gai.conf` 中的 Leikwan managed block。
+- 设置系统 DNS 为国外 DNS：`8.8.8.8`、`1.1.1.1`。
+
+这些系统级修改会先备份，再写入可恢复配置。手动入口在：
+
+```text
+高级维护 -> 系统网络优化
+```
+
+也可以使用 CLI：
+
+```bash
+lq system network status
+lq system network prepare
+lq system ipv4-prefer enable
+lq system dns set 8.8.8.8,1.1.1.1
+lq system dns restore
+lq system ipv6 disable
+lq system ipv6 restore
+lq system ipv6 lockdown
+lq system bbr enable
+```
+
+系统 DNS 影响整机解析；DDNS 多 DNS 解析器只影响 Toolkit 对域名解析变化的检测，两者不是同一套配置。如果不希望脚本继续管理系统 DNS，可在“系统网络优化”中恢复。
+
+IPv6 禁用是 sysctl 级别的禁用 / 恢复；“IPv6 入站收口 nftables”只是用 nftables 限制 IPv6 入站访问，不是禁用 IPv6。
 
 ## 域名解析变化自动刷新
 
@@ -98,10 +129,10 @@ PUBLIC_IP_CHECK_URLS=
 ```bash
 bash scripts/build-release.sh
 # 或指定版本
-VERSION=1.4.8 bash scripts/build-release.sh
+VERSION=1.4.9 bash scripts/build-release.sh
 ```
 
-产物写入 `dist/leikwan-toolkit-1.4.8.tar.gz` 和对应 `.sha256`，只包含 Shell LTS 需要的 VERSION、README、主脚本、scripts、docs、tests 和可选 LICENSE。`.sha256` 文件使用 `hash  leikwan-toolkit-1.4.8.tar.gz` 的 basename 格式。`VERSION` 用于 `lq update check` 轻量检查最新版本，发布时必须与 `TOOL_VERSION` 保持一致。
+产物写入 `dist/leikwan-toolkit-1.4.9.tar.gz` 和对应 `.sha256`，只包含 Shell LTS 需要的 VERSION、README、主脚本、scripts、docs、tests 和可选 LICENSE。`.sha256` 文件使用 `hash  leikwan-toolkit-1.4.9.tar.gz` 的 basename 格式。`VERSION` 用于 `lq update check` 轻量检查最新版本，发布时必须与 `TOOL_VERSION` 保持一致。
 
 ## 文档
 

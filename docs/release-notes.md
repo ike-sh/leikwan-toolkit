@@ -1,5 +1,15 @@
 # Release Notes
 
+## 1.4.9 LTS
+
+- 快速组网在 B 利群主机初始化和 A 公网入口部署前自动执行系统网络预处理：IPv4 优先 + `8.8.8.8` / `1.1.1.1` 系统 DNS。
+- 新增“高级维护 -> 系统网络优化”，集中管理 IPv4 优先、系统 DNS 设置 / 恢复、IPv6 sysctl 禁用 / 恢复、BBR / fq 和 IPv6 入站收口。
+- IPv4 优先改为 `/etc/gai.conf` managed block，重复开启不会重复追加，关闭时只移除托管块。
+- 系统 DNS 写入 systemd-resolved drop-in 或普通 `/etc/resolv.conf`，写入前备份；恢复时删除托管配置或回滚备份。
+- IPv6 禁用 / 恢复使用 sysctl 托管文件，不再把 IPv6 入站收口冒充为禁用 IPv6。
+- IPv6 入站收口迁移为 nftables `table inet leikwan_ipv6_lockdown`，保留 ICMPv6、lo、已建立连接和 SSH 22，不影响 IPv4。
+- 新增 `lq system ...` CLI，doctor 会提示并在 `--auto-fix` 中执行系统网络预处理，但不会默认禁用 IPv6 或自动做 IPv6 入站收口。
+
 ## 1.4.8 LTS
 
 - 修复 `lq update check` 风控式轮询 GitHub 镜像池的问题，latest 元数据查询默认改为轻量 `fast` 模式。

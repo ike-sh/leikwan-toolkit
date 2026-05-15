@@ -1,6 +1,6 @@
 # doctor 诊断
 
-Leikwan Toolkit 1.4.5 继续保留详细 `doctor`，同时修复历史 FAIL / WARN 污染问题，并新增自动修复常见问题入口。
+Leikwan Toolkit 1.4.9 继续保留详细 `doctor`，同时修复历史 FAIL / WARN 污染问题，并新增自动修复常见问题入口。
 
 ## 常用命令
 
@@ -39,6 +39,7 @@ lq --doctor-auto-fix
 
 允许自动修复：
 
+- 系统网络预处理：开启 IPv4 优先，并把系统 DNS 设置为 `8.8.8.8` / `1.1.1.1`。
 - nftables 表或 MSS clamp 缺失。
 - route table metadata 不一致。
 - relay service 丢失但已有有效 relay network.env。
@@ -54,8 +55,12 @@ lq --doctor-auto-fix
 - 删除 forwards。
 - 删除 PBR。
 - 重置 EasyTier network secret。
+- 默认禁用 IPv6。
+- 自动执行 IPv6 入站收口。
 
 自动修复会先运行一次简洁 doctor，记录修复前 FAIL / WARN 数量；修复后再运行 doctor，并输出已恢复项与剩余问题。
+
+doctor 会在 IPv4 优先未启用时提示 `lq system network prepare`。如果系统 DNS 不是 Leikwan 推荐的国外 DNS，也会提示当前系统 DNS 与推荐值不同。这里的“系统 DNS”影响整机解析；DDNS 多 DNS 解析器只影响 Toolkit 的域名变化检测。
 
 缺少 `dig` 时会在 root + apt-get 环境下直接尝试安装 `dnsutils`；安装失败不会中断 doctor，会继续按 fallback 能力检查。
 
