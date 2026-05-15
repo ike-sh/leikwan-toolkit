@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-TOOL_VERSION="1.4.3"
+TOOL_VERSION="1.4.4"
 RELEASE_CHANNEL="LTS"
 PROJECT_NAME="leikwan-toolkit"
 PROJECT_TITLE="利群快速组网工具"
@@ -886,6 +886,7 @@ package_command() {
     unzip) printf '%s' unzip ;;
     nftables) printf '%s' nft ;;
     netcat-openbsd) printf '%s' nc ;;
+    dnsutils) printf '%s' dig ;;
     iptables-persistent) printf '%s' ip6tables-save ;;
     ca-certificates) printf '%s' "" ;;
     coreutils) printf '%s' base64 ;;
@@ -939,6 +940,35 @@ install_packages() {
     DEPS_INSTALLED_THIS_RUN="${DEPS_INSTALLED_THIS_RUN} ${pkg}"
   done
   date '+%F %T' >"$DEPS_MARKER"
+}
+
+doctor_should_offer_dnsutils() {
+  local timer_state ddns_enabled
+  command -v dig >/dev/null 2>&1 && return 1
+  ddns_enabled="$(ddns_config_value DDNS_GLOBAL_ENABLED "$DDNS_GLOBAL_ENABLED_DEFAULT")"
+  timer_state="$(ddns_timer_state 2>/dev/null || true)"
+  [[ "${ddns_enabled,,}" == "true" || "$timer_state" == "active" ]] && return 0
+  (( $(ddns_domain_forward_count 2>/dev/null || printf '0') + $(ddns_domain_entry_count 2>/dev/null || printf '0') + $(ddns_domain_pbr_count 2>/dev/null || printf '0') > 0 ))
+}
+
+doctor_auto_fix_dnsutils() {
+  command -v dig >/dev/null 2>&1 && return 0
+  if [[ "${LQ_AUTO_FIX_INSTALL_DNSUTILS:-false}" =~ ^([Tt][Rr][Uu][Ee]|[Yy][Ee][Ss]|1|[Yy])$ ]]; then
+    :
+  elif is_interactive; then
+    prompt_yes_no "检测到 dig 缺失，是否安装 dnsutils 以启用多 DNS 解析器检测？" "Y" || {
+      echo "- 已跳过 dnsutils 安装"
+      return 0
+    }
+  else
+    echo "- dig 缺失；如需非交互安装 dnsutils，请设置 LQ_AUTO_FIX_INSTALL_DNSUTILS=true"
+    return 0
+  fi
+  if install_packages dnsutils; then
+    echo "- dnsutils 已安装"
+  else
+    warn "dnsutils 安装失败；多 DNS 解析器检测能力仍受限。"
+  fi
 }
 
 extract_first_ipv4() {
@@ -1807,7 +1837,7 @@ update_download_asset() {
     ok "下载成功：${raw_url}"
     return 0
   fi
-  warn "GitHub Release 下载失败，正在尝试镜像。"
+  warn "GitHub 直连超时，正在自动切换镜像。"
   while IFS= read -r candidate; do
     [[ -n "$candidate" && "$candidate" != "$raw_url" ]] || continue
     for seen_line in "${seen[@]}"; do
@@ -1817,7 +1847,7 @@ update_download_asset() {
     info "正在尝试镜像：${candidate}"
     if curl -fL --retry 1 --connect-timeout 15 --max-time 120 -o "$tmp" "$candidate"; then
       mv -f "$tmp" "$dest_file"
-      ok "下载成功：${candidate}"
+      ok "镜像下载成功。"
       return 0
     fi
     warn "镜像下载失败，尝试下一个地址。"
@@ -4138,9 +4168,10 @@ delete_entry() {
 
 set_entry_enabled() {
   need_root_unless_dry_run
-  local name enabled row old_enabled
+  local name enabled row old_enabled public_host
   name="$(select_entry_name)" || return 0
   old_enabled="$(entries_rows | awk -F'\t' -v n="$name" '$1==n {print $7; exit}')"
+  public_host="$(entries_rows | awk -F'\t' -v n="$name" '$1==n {print $2; exit}')"
   if [[ "${old_enabled:-false}" == "true" ]]; then
     if prompt_yes_no "是否禁用公网入口 ${name}？" "N"; then
       enabled="false"
@@ -4164,6 +4195,7 @@ set_entry_enabled() {
   else
     ok "已禁用公网入口：${name}"
   fi
+  refresh_entry_ddns_cache_after_entry_change "$name" "$public_host" || true
   prompt_apply_relay_after_entry_change
 }
 
@@ -4197,6 +4229,7 @@ switch_primary_entry() {
       write_file "$ENTRIES_TSV" "$content" 600
       ok "已切换主公网入口：${name}"
       info "手动切换模式：应用 relay 后只保留 ${name} peer。"
+      refresh_entry_ddns_cache_after_entries_change || true
       prompt_apply_relay_after_entry_change
       ;;
     2)
@@ -4206,6 +4239,7 @@ switch_primary_entry() {
       write_file "$ENTRIES_TSV" "$content" 600
       ok "已切换主公网入口：${name}"
       info "主备推荐模式：应用 relay 后保留所有 enabled peer，${name} 会在输出清单中标记 PRIMARY。"
+      refresh_entry_ddns_cache_after_entries_change || true
       prompt_apply_relay_after_entry_change
       ;;
     3|0|"") return 0 ;;
@@ -4232,6 +4266,7 @@ bulk_entry_enable_menu() {
         content="$(entries_rows | awk -F'\t' 'BEGIN{OFS="\t"} {$7="true"; print}')"
         write_file "$ENTRIES_TSV" "$content" 600
         ok "已启用所有公网入口。"
+        refresh_entry_ddns_cache_after_entries_change || true
         prompt_apply_relay_after_entry_change
         pause_after_action
         return 0
@@ -4243,6 +4278,7 @@ bulk_entry_enable_menu() {
         content="$(entries_rows | awk -F'\t' 'BEGIN{OFS="\t"} {$7="false"; print}')"
         write_file "$ENTRIES_TSV" "$content" 600
         ok "已禁用所有公网入口。"
+        refresh_entry_ddns_cache_after_entries_change || true
         prompt_apply_relay_after_entry_change
         pause_after_action
         return 0
@@ -4254,6 +4290,7 @@ bulk_entry_enable_menu() {
         content="$(entries_rows | awk -F'\t' -v n="$name" 'BEGIN{OFS="\t"} {$7=($1==n ? "true" : "false"); print}')"
         write_file "$ENTRIES_TSV" "$content" 600
         ok "已只保留公网入口 enabled：${name}"
+        refresh_entry_ddns_cache_after_entries_change || true
         prompt_apply_relay_after_entry_change
         pause_after_action
         return 0
@@ -4507,6 +4544,45 @@ prompt_apply_relay_after_entry_change() {
   else
     info "请在维护窗口执行：利群主机 -> EasyTier 组网管理 -> 启动 / 重启 relay 服务"
   fi
+}
+
+refresh_entry_ddns_cache_after_entry_change() {
+  local name="$1" public_host="$2" result="ok"
+  [[ -n "$public_host" ]] || return 0
+  is_domain_name "$public_host" || return 0
+  info "检测到公网入口使用域名，正在刷新解析缓存..."
+  DDNS_FORWARD_CHANGED=""; DDNS_FORWARD_FAILED=""
+  DDNS_ENTRY_CHANGED=""; DDNS_ENTRY_FAILED=""
+  DDNS_PBR_CHANGED=""; DDNS_PBR_FAILED=""
+  DDNS_RELAY_RESTART_NEEDED=false
+  DDNS_NFT_APPLIED=false; DDNS_PBR_APPLIED=false; DDNS_RELAY_RESTARTED=false
+  DDNS_ENTRY_REPORT_BLOCKS=""
+  DDNS_ENTRY_RECENT_EVENTS=""
+  DDNS_ENTRY_RECENT_ACTION=""
+  DDNS_ENTRY_CHECKED=0; DDNS_ENTRY_DOMAIN_COUNT=0; DDNS_ENTRY_CHANGED_COUNT=0; DDNS_ENTRY_FAILED_COUNT=0
+  DDNS_DNS_SPLIT_DETECTED=false
+  DDNS_DNS_INCOMPLETE_DETECTED=false
+  DDNS_DNS_DIG_WARNED=false
+  DDNS_DNS_SPLIT_DOMAIN=""
+  DDNS_DNS_SPLIT_RESULTS=""
+  DDNS_DNS_SPLIT_SELECTED_IP=""
+  DDNS_DNS_SPLIT_SELECTED_SOURCE=""
+  if ! ddns_ensure_config || ! ddns_refresh_entries_scope; then
+    warn "公网入口 ${name} 解析缓存刷新失败，请稍后执行：lq ddns run --scope entries"
+    result="warn"
+  fi
+  if [[ -n "$DDNS_ENTRY_RECENT_EVENTS" ]]; then
+    DDNS_ENTRY_RECENT_ACTION="已写入缓存"
+  fi
+  ddns_write_last_status "$result" "entries" "" "" "$DDNS_ENTRY_CHANGED" "$DDNS_ENTRY_FAILED" "" "" false false false false
+  return 0
+}
+
+refresh_entry_ddns_cache_after_entries_change() {
+  local has_domain
+  has_domain="$(entries_rows | awk -F'\t' '$7=="true" && $2 !~ /^([0-9]{1,3}\.){3}[0-9]{1,3}$/ && $2 ~ /[A-Za-z]/ {print $1; exit}')"
+  [[ -n "$has_domain" ]] || return 0
+  refresh_entry_ddns_cache_after_entry_change "$has_domain" "$(entries_rows | awk -F'\t' -v n="$has_domain" '$1==n {print $2; exit}')"
 }
 
 reserved_entry_port() {
@@ -5880,6 +5956,19 @@ ddns_timer_state() {
   printf '%s' "$timer_state"
 }
 
+ddns_timer_next_run() {
+  local unit="${DDNS_SERVICE_NAME}.timer" value
+  command -v systemctl >/dev/null 2>&1 || { printf 'unknown'; return 0; }
+  value="$(systemctl show "$unit" -p NextElapseUSecRealtime --value 2>/dev/null || true)"
+  if [[ -n "$value" && "$value" != "n/a" && "$value" != "0" ]]; then
+    printf '%s' "$value"
+    return 0
+  fi
+  value="$(systemctl list-timers "$unit" --no-legend --no-pager 2>/dev/null | awk 'NF {print $1" "$2" "$3" "$4; exit}' || true)"
+  [[ -n "$value" ]] && { printf '%s' "$value"; return 0; }
+  printf 'unknown'
+}
+
 ddns_auto_snapshot() {
   local dest
   need_root_unless_dry_run
@@ -6368,6 +6457,7 @@ ddns_disable_timer() {
 
 ddns_status() {
   local timer_state interval auto_enabled update_dns
+  local timer_display next_run
   local last_time last_result last_scope forward_changed forward_failed entry_changed entry_failed pbr_changed pbr_failed
   local relay_restart_needed nft_applied pbr_applied relay_restarted public_ip public_ip_source
   local dns_strategy dns_servers dns_split dns_incomplete dns_split_domain dns_split_results dns_selected_ip dns_selected_source dns_line
@@ -6377,6 +6467,13 @@ ddns_status() {
   local forward_changed_count forward_failed_count entry_changed_count entry_failed_count pbr_changed_count pbr_failed_count
   local nft_text pbr_text
   timer_state="$(ddns_timer_state)"
+  if [[ "$timer_state" == "active" ]]; then
+    timer_display="enabled"
+    next_run="$(ddns_timer_next_run)"
+  else
+    timer_display="disabled"
+    next_run="未启用"
+  fi
   interval="$(ddns_config_value DDNS_GLOBAL_INTERVAL "$(ddns_config_value DDNS_REFRESH_INTERVAL "$DDNS_REFRESH_INTERVAL_DEFAULT")")"
   auto_enabled="$(ddns_config_value DDNS_GLOBAL_ENABLED "$DDNS_GLOBAL_ENABLED_DEFAULT")"
   [[ "$timer_state" == "active" ]] && auto_enabled="true"
@@ -6435,6 +6532,8 @@ ddns_status() {
   echo "DDNS / 域名解析状态"
   echo "----------------------------------------"
   echo "自动检测: $(bool_enabled_disabled "$auto_enabled")"
+  echo "timer: ${timer_display}"
+  echo "下次检测: ${next_run}"
   echo "检测间隔: ${interval}"
   echo "辅助公网 IP: ${public_ip:-未检测}"
   echo "辅助公网 IP 检测源: ${public_ip_source:-"-"}"
@@ -6481,6 +6580,7 @@ ddns_status() {
     echo "动作: ${entry_recent_action:-已写入缓存}"
   fi
   [[ -n "$last_scope" ]] && echo "详细分类: ${last_scope}"
+  return 0
 }
 
 ddns_apply_entries() {
@@ -9781,6 +9881,9 @@ doctor_auto_fix() {
   if [[ "$(ddns_timer_state)" != "active" ]] && (( $(ddns_domain_forward_count 2>/dev/null || printf '0') + $(ddns_domain_entry_count 2>/dev/null || printf '0') + $(ddns_domain_pbr_count 2>/dev/null || printf '0') > 0 )); then
     ddns_enable_timer && echo "- DDNS timer 已启用"
   fi
+  if doctor_should_offer_dnsutils; then
+    doctor_auto_fix_dnsutils
+  fi
   (( release_global_lock == 1 )) && global_lock_release
   echo
   echo "修复后复查："
@@ -10102,10 +10205,11 @@ report_b_ddns_entry_monitor_status() {
 }
 
 report_ddns_global_state() {
-  local public_ip public_source result forward_failed entry_failed pbr_failed restart_needed update_dns dns_split dns_domain dns_selected ddns_enabled timer_state
+  local public_ip public_source result last_time forward_failed entry_failed pbr_failed restart_needed update_dns dns_split dns_domain dns_selected ddns_enabled timer_state
   public_ip="$(env_file_get "$DDNS_STATUS_FILE" LAST_DDNS_PUBLIC_IP)"
   public_source="$(env_file_get "$DDNS_STATUS_FILE" LAST_DDNS_PUBLIC_IP_SOURCE)"
   result="$(env_file_get "$DDNS_STATUS_FILE" LAST_DDNS_RESULT)"
+  last_time="$(env_file_get "$DDNS_STATUS_FILE" LAST_DDNS_TIME)"
   forward_failed="$(env_file_get "$DDNS_STATUS_FILE" LAST_DDNS_FORWARD_FAILED)"
   entry_failed="$(env_file_get "$DDNS_STATUS_FILE" LAST_DDNS_ENTRY_FAILED)"
   pbr_failed="$(env_file_get "$DDNS_STATUS_FILE" LAST_DDNS_PBR_FAILED)"
@@ -10116,9 +10220,11 @@ report_ddns_global_state() {
   dns_selected="$(env_file_get "$DDNS_STATUS_FILE" LAST_DDNS_DNS_SELECTED_IP)"
   ddns_enabled="$(ddns_config_value DDNS_GLOBAL_ENABLED "$DDNS_GLOBAL_ENABLED_DEFAULT")"
   timer_state="$(ddns_timer_state)"
-  if [[ -n "$public_ip" ]]; then
+  if [[ -n "$last_time" && -n "$public_ip" && -n "$public_source" && "${result,,}" != "fail" ]]; then
     report OK "辅助公网 IP 检测最近成功：${public_ip} (${public_source:-unknown})"
-  elif [[ -n "$result" ]]; then
+  elif [[ "${result,,}" == "fail" ]]; then
+    report WARN "辅助公网 IP 检测失败，请检查网络或自定义 PUBLIC_IP_CHECK_URLS。"
+  elif [[ -n "$last_time" && -z "$public_ip" ]]; then
     report WARN "辅助公网 IP 检测最近没有可用结果，请检查网络或自定义 PUBLIC_IP_CHECK_URLS。"
   else
     report INFO "尚无辅助公网 IP 检测缓存；域名解析变化检测仍可执行：lq ddns run"

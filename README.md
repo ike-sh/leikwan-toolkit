@@ -1,6 +1,6 @@
 # Leikwan Toolkit
 
-Leikwan Toolkit `1.4.3 LTS` is the Shell LTS line for local TCP/UDP forwarding, EasyTier relay / entry setup, nftables, IPv4 PBR, snapshots, status, doctor, and DDNS domain-resolution refresh.
+Leikwan Toolkit `1.4.4 LTS` is the Shell LTS line for local TCP/UDP forwarding, EasyTier relay / entry setup, nftables, IPv4 PBR, snapshots, status, doctor, and DDNS domain-resolution refresh.
 
 当前仓库只维护 Shell LTS：
 
@@ -27,7 +27,7 @@ lq forward apply-relay --auto-fix-route
 
 ```bash
 lq --version
-# leikwan-toolkit 1.4.3 LTS
+# leikwan-toolkit 1.4.4 LTS
 ```
 
 ## 域名解析变化自动刷新
@@ -43,7 +43,7 @@ Toolkit 在 B 利群主机侧定时解析这些域名，并根据解析结果相
 
 本机公网 IP 检测只作为辅助状态展示，不参与 entries / forwards / PBR 的变化判断。
 
-1.4.3 起，DDNS 域名检测继续支持多 DNS 解析器，避免只依赖系统 DNS 时漏掉国内外 DNS 传播不一致：
+1.4.4 起，DDNS 域名检测继续支持多 DNS 解析器，避免只依赖系统 DNS 时漏掉国内外 DNS 传播不一致：
 
 ```text
 DNS_RESOLVE_SERVERS=1.1.1.1,8.8.8.8,223.5.5.5,119.29.29.29
@@ -61,7 +61,11 @@ apt install -y dnsutils
 
 没有 `dig` 时会尝试 `nslookup`、`host` 和系统 resolver fallback；如果只能使用系统 resolver，状态会显示 `DNS 传播状态: 未完整检测`。
 
+`lq doctor --auto-fix` 可在缺少 `dig` 时安装 `dnsutils`；非交互环境可设置 `LQ_AUTO_FIX_INSTALL_DNSUTILS=true`。
+
 发现采用结果与本地缓存不同时，Toolkit 会更新 resolved 缓存并自动刷新本地转发 / PBR。公网入口 `public_host` 变化时会标记 `relay restart needed`；默认不会自动重启 relay。需要自动重启时再显式设置：
+
+启用或禁用公网入口后，如果该入口使用域名，Toolkit 会自动轻量刷新 `resolved-entries.tsv` 和 DDNS 状态缓存；刷新失败只 WARN，不阻塞入口启停。
 
 ```text
 DDNS_AUTO_RESTART_RELAY=true

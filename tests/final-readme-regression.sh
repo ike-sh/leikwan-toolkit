@@ -4,7 +4,7 @@ set -Eeuo pipefail
 ROOT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
-grep -q "1.4.3" README.md
+grep -q "1.4.4" README.md
 grep -q "LTS" README.md
 grep -q "lq init" README.md
 grep -q "DDNS" README.md

@@ -1,6 +1,6 @@
 # 域名解析变化自动刷新
 
-Leikwan Toolkit 1.4.3 LTS 将 DDNS 用户路径收敛为 B 利群主机侧的“域名解析变化自动刷新”。它默认不修改 DNS 服务商记录，也不要求配置 DNS provider token。
+Leikwan Toolkit 1.4.4 LTS 将 DDNS 用户路径收敛为 B 利群主机侧的“域名解析变化自动刷新”。它默认不修改 DNS 服务商记录，也不要求配置 DNS provider token。
 
 公网入口 A 的域名 / IP 可以由路由器、服务商客户端、Cloudflare、外部 DDNS 客户端或外部脚本维护。Toolkit 只在 B 侧定时解析域名，发现解析结果相对本地缓存变化后刷新本机转发、缓存和 PBR。
 
@@ -31,7 +31,7 @@ lq ddns logs
 
 ## 多 DNS 解析器
 
-1.4.3 起，域名解析变化检测不再只依赖系统默认 DNS。它会按配置的解析器列表执行 A 记录查询，并检测国内外 DNS 传播不一致或缓存不一致。
+1.4.4 起，域名解析变化检测不再只依赖系统默认 DNS。它会按配置的解析器列表执行 A 记录查询，并检测国内外 DNS 传播不一致或缓存不一致。
 
 默认配置：
 
@@ -47,6 +47,12 @@ DNS_RESOLVE_WARN_ON_SPLIT=true
 
 ```bash
 apt install -y dnsutils
+```
+
+`lq doctor --auto-fix` 可以安装 `dnsutils`。非交互环境需要显式设置：
+
+```bash
+LQ_AUTO_FIX_INSTALL_DNSUTILS=true lq doctor --auto-fix
 ```
 
 没有 `dig` 时，脚本会依次尝试 `nslookup DOMAIN SERVER`、`host DOMAIN SERVER`，最后 fallback 到 `getent ahostsv4 DOMAIN`。如果只能使用系统 resolver，状态会显示：
@@ -148,6 +154,8 @@ DDNS_UPDATE_DNS_RECORD=false
 - 写入 `/var/log/leikwan-ddns-refresh.log`。
 - 公网入口域名变化时标记 `relay restart needed`。
 
+启用或禁用公网入口后，如果该入口使用域名，Toolkit 会自动轻量刷新 `entries/resolved-entries.tsv` 和 `status/last-ddns.env`。这个刷新不会强制重启 relay；如果刷新失败，只记录 WARN。
+
 默认不会自动重启 relay。确认能接受短暂中断后，再设置：
 
 ```text
@@ -166,6 +174,8 @@ lq ddns status
 DDNS / 域名解析状态
 ----------------------------------------
 自动检测: enabled
+timer: enabled
+下次检测: Fri 2026-05-15 12:05:00 CST
 检测间隔: 5min
 辅助公网 IP: 203.0.113.10
 辅助公网 IP 检测源: https://api.ipify.org
