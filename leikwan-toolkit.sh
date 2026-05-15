@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-TOOL_VERSION="1.4.11"
+TOOL_VERSION="1.4.12"
 RELEASE_CHANNEL="LTS"
 PROJECT_NAME="leikwan-toolkit"
 PROJECT_TITLE="利群快速组网工具"
@@ -2429,11 +2429,11 @@ get_latest_release_version() {
   [[ -n "$version" ]] && { printf '%s' "$version"; return 0; }
   if [[ "$mode" == "fast" ]]; then
     dl_warn "无法快速获取最新版本。"
-    dl_info "可直接选择“更新到最新版本”，或设置 LEIKWAN_TARGET_VERSION=1.4.11 后重试。"
+    dl_info "可直接选择“更新到最新版本”，或设置 LEIKWAN_TARGET_VERSION=1.4.12 后重试。"
     dl_info "如需完整探测，可设置 LEIKWAN_GITHUB_METADATA_MODE=full。"
   else
     dl_warn "无法获取最新版本。"
-    dl_info "可设置 LEIKWAN_TARGET_VERSION=1.4.11 后重试，或检查网络 / 镜像配置。"
+    dl_info "可设置 LEIKWAN_TARGET_VERSION=1.4.12 后重试，或检查网络 / 镜像配置。"
   fi
   return 1
 }
@@ -2654,7 +2654,7 @@ update_check() {
   latest_version="$(get_latest_release_version)" || return 1
   if [[ -z "$latest_version" ]]; then
     warn "无法快速获取最新版本。"
-    info "可直接选择“更新到最新版本”，或设置 LEIKWAN_TARGET_VERSION=1.4.11 后重试。"
+    info "可直接选择“更新到最新版本”，或设置 LEIKWAN_TARGET_VERSION=1.4.12 后重试。"
     info "如需完整探测，可设置 LEIKWAN_GITHUB_METADATA_MODE=full。"
     return 1
   fi
@@ -2776,12 +2776,12 @@ update_run() {
       [[ -n "$latest_version" ]] || { fail "LEIKWAN_TARGET_VERSION 无效：${LEIKWAN_TARGET_VERSION}"; exit 1; }
       tag="v${latest_version}"
     else
-      latest="$(update_latest_release)" || { dl_error "无法确定最新版本，已取消更新。"; dl_info "可设置 LEIKWAN_TARGET_VERSION=1.4.11 后重试。"; exit 1; }
+      latest="$(update_latest_release)" || { dl_error "无法确定最新版本，已取消更新。"; dl_info "可设置 LEIKWAN_TARGET_VERSION=1.4.12 后重试。"; exit 1; }
       IFS=$'\t' read -r tag latest_version <<<"$latest"
     fi
     if [[ -z "${latest_version:-}" ]] || ! release_version_from_tag "$latest_version" >/dev/null 2>&1; then
       dl_error "无法确定最新版本，已取消更新。"
-      dl_info "可设置 LEIKWAN_TARGET_VERSION=1.4.11 后重试。"
+      dl_info "可设置 LEIKWAN_TARGET_VERSION=1.4.12 后重试。"
       exit 1
     fi
     if [[ -z "${tag:-}" ]] || ! release_version_from_tag "$tag" >/dev/null 2>&1; then
@@ -4612,7 +4612,7 @@ quick_deploy_entry_from_network_pairing() {
   role="$(env_file_get "$tmp" ROLE)"
   case "$role" in
     leikwan-relay) ;;
-    cloud-entry) fail "你粘贴的是入口码，需要在 B 利群主机选择第 4 项。"; rm -f "$tmp"; return 1 ;;
+    cloud-entry) fail "你粘贴的是入口码，需要回到 B 利群主机，进入“快速组网”，选择“粘贴入口返回码完成接入”。"; rm -f "$tmp"; return 1 ;;
     *) fail "这不是 EasyTier 网络码，请确认粘贴的是 B 生成的那段。"; rm -f "$tmp"; return 1 ;;
   esac
   require_pairing_fields "$tmp" PAIRING_VERSION ROLE EASYTIER_NETWORK_NAME EASYTIER_NETWORK_SECRET RELAY_ET_IP SUGGESTED_ENTRY_NAME SUGGESTED_ENTRY_ET_IP || { rm -f "$tmp"; return 1; }
@@ -4712,7 +4712,7 @@ quick_deploy_relay_from_entry_pairing() {
   role="$(env_file_get "$tmp" ROLE)"
   case "$role" in
     cloud-entry) ;;
-    leikwan-relay) fail "你粘贴的是网络码，需要在 A 公网入口选择第 3 项。"; rm -f "$tmp"; return 0 ;;
+    leikwan-relay) fail "你粘贴的是网络码，需要回到 A 公网入口，进入“快速组网”，选择“粘贴接入码并部署入口”。"; rm -f "$tmp"; return 0 ;;
     *) fail "这不是 EasyTier 入口码，请确认粘贴的是 A 生成的那段。"; rm -f "$tmp"; return 0 ;;
   esac
   require_pairing_fields "$tmp" PAIRING_VERSION ROLE ENTRY_NAME ENTRY_PUBLIC_HOST ENTRY_ET_IP || { rm -f "$tmp"; return 0; }
@@ -8288,6 +8288,25 @@ warn_if_forward_port_outside_expose() {
   fi
 }
 
+entry_expose_conflict_range_hint() {
+  local start="$1" end="$2" conflict_ports="$3" first suggestions=()
+  first="${conflict_ports%%,*}"
+  [[ "$first" =~ ^[0-9]+$ ]] || return 0
+  if (( first > start )); then
+    suggestions+=("${start}-$((first - 1))")
+  fi
+  if (( first < end )); then
+    suggestions+=("$((first + 1))-${end}")
+  fi
+  if (( ${#suggestions[@]} >= 2 )); then
+    info "可改用不包含这些端口的端口池，例如 ${suggestions[0]} 或 ${suggestions[1]}。"
+  elif (( ${#suggestions[@]} == 1 )); then
+    info "可改用不包含这些端口的端口池，例如 ${suggestions[0]}。"
+  else
+    info "可改用不包含这些端口的端口池。"
+  fi
+}
+
 entry_expose_range() {
   need_root_unless_dry_run
   ensure_base_dirs
@@ -8337,10 +8356,16 @@ entry_expose_range() {
       END {
         for (p in seen) print p
       }
-    ' | sort -n | paste -sd, -)"
+    ' | sort -n | awk '
+      NR <= 12 { if (out=="") out=$1; else out=out "," $1 }
+      NR == 13 { more=1 }
+      END { if (more) out=out ",..."; print out }
+    ')"
   fi
   if [[ -n "$conflict_ports" ]]; then
     warn "入口端口池 ${start}-${end} 中发现本机监听端口：${conflict_ports}"
+    warn "如果继续，外部访问这些端口可能会被入口端口池 DNAT 接管，本机原服务可能无法从公网访问。"
+    entry_expose_conflict_range_hint "$start" "$end" "$conflict_ports"
     prompt_yes_no "是否继续配置端口池？" "N" || return 0
   fi
   is_ipv4 "${relay_ip:-$RELAY_ET_IP}" || { fail "Relay EasyTier IP 非法：${relay_ip:-$RELAY_ET_IP}"; return 1; }
@@ -8353,7 +8378,9 @@ ENABLED=true" 600
   if [[ "$apply" != "no" ]]; then
     apply_nft_rules "cloud-entry" || warn "公网入口 nftables 未应用成功，请检查后重试。"
   fi
-  info "下一步：回到 B 利群主机，如果需要指定 CN2 / 9929 出口，请先选择第 7 项配置 PBR，再选择第 6 项添加后端转发目标。"
+  info "下一步：回到 B 利群主机，进入“利群主机 B”菜单。"
+  info "如需指定 CN2 / 9929 出口，请先进入“IPv4 PBR 出口策略（PBR / 出口策略）”配置出口策略。"
+  info "然后进入“转发目标管理（后端转发目标 / 转发管理）”添加后端目标。"
 }
 
 warn_forward_apply_ssh_risk() {
@@ -13636,10 +13663,10 @@ A 和 B 都执行：
 nc -vz -w 5 A_PUBLIC_IP 10001
 
 新增第二台公网入口：
-- B 执行第 2 项，脚本会自动推荐新的 EasyTier IP 和监听端口。
-- 新 A 执行第 3 项，粘贴网络码。
+- B 进入“快速组网”，生成公网入口接入码，脚本会自动推荐新的 EasyTier IP 和监听端口。
+- 新 A 进入“快速组网”，粘贴接入码并部署入口。
 - 新 A 执行“公网入口 A -> 配置入口端口池”。
-- B 执行第 4 项，粘贴 A 返回码。
+- B 回到“快速组网”，粘贴 A 返回码完成接入。
 - B 执行 利群主机 -> 公网入口列表管理 查看 / 测试。
 
 确认：

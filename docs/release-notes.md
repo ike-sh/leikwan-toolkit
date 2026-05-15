@@ -1,5 +1,10 @@
 # Release Notes
 
+## 1.4.12 LTS
+
+- 修复 A 端“配置入口端口池”成功后的下一步提示，不再写死菜单编号，改为提示进入“利群主机 B”“IPv4 PBR 出口策略”和“转发目标管理”。
+- 增强入口端口池检测到本机监听端口时的提示，明确继续配置后外部访问可能被 DNAT 接管，并给出避开冲突端口的范围建议。
+
 ## 1.4.11 LTS
 
 - 修复 `lq system network prepare` 对旧版 Leikwan 托管 DNS 的误判：只有主 DNS 和 FallbackDNS 都精确等于当前目标配置时才算 `managed-current`。
