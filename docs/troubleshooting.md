@@ -86,7 +86,27 @@ relay 重启后 easytier-cli 的 peer 列表可能短时间未刷新。脚本会
 
 ## EasyTier 下载
 
-脚本会优先使用 GitHub API metadata 找到的资产；如果无法获取 metadata，会尝试已知 zip 和 tar.gz/tgz 候选。缺少 `unzip` 时会跳过 zip 并继续尝试 tar.gz/tgz，或引导用户提供本地包 / 本地二进制。
+1.4.6 起，GitHub 下载默认使用 `LEIKWAN_GITHUB_DOWNLOAD_MODE=mirror-first`：先尝试镜像池，再把官方 GitHub 作为最后兜底。需要改回官方优先时设置：
+
+```bash
+export LEIKWAN_GITHUB_DOWNLOAD_MODE=origin-first
+```
+
+默认镜像池：
+
+```bash
+export LEIKWAN_GITHUB_MIRRORS="https://gh-proxy.com/,https://gh.llkk.cc/,https://gh.ddlc.top/,https://ghproxy.net/,https://mirror.ghproxy.com/,https://cf.ghproxy.cc/,https://gh.api.99988866.xyz/,https://github.akams.cn/"
+```
+
+EasyTier release asset 不再依赖 GitHub API 作为前置步骤。脚本会先构造 `zip`、`tar.gz`、`tgz` 候选 URL，并按镜像池优先下载；API 只作为辅助兜底。单个下载源会使用短连接超时、总超时和低速失败切换，避免官方 GitHub 大文件直连卡住很久。缺少 `unzip` 时会跳过 zip 并继续尝试 tar.gz/tgz，或引导用户提供本地包 / 本地二进制。
+
+EasyTier 成功下载的安装包会缓存到：
+
+```text
+/var/cache/leikwan-toolkit/downloads
+```
+
+下次安装同版本会优先复用缓存；缓存包校验或解压失败时会删除缓存并重新下载。
 
 ## 端口混淆
 
@@ -348,7 +368,8 @@ lq update run
 如果下载失败，请检查网络或设置 GitHub 镜像：
 
 ```bash
-export LEIKWAN_GITHUB_MIRRORS="https://gh.llkk.cc/,https://gh.ddlc.top/,https://gh-proxy.com/,https://ghproxy.net/"
+export LEIKWAN_GITHUB_DOWNLOAD_MODE=mirror-first
+export LEIKWAN_GITHUB_MIRRORS="https://gh-proxy.com/,https://gh.llkk.cc/,https://gh.ddlc.top/,https://ghproxy.net/,https://mirror.ghproxy.com/,https://cf.ghproxy.cc/,https://gh.api.99988866.xyz/,https://github.akams.cn/"
 ```
 
 sha256 校验失败时不会替换脚本。替换后版本异常时会自动恢复更新前备份。需要手动恢复时执行：

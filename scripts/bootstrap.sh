@@ -3,20 +3,27 @@ set -Eeuo pipefail
 
 PROJECT_GITHUB="https://github.com/ike-sh/leikwan-toolkit"
 RAW_SCRIPT_URL="https://raw.githubusercontent.com/ike-sh/leikwan-toolkit/main/leikwan-toolkit.sh"
+LEIKWAN_GITHUB_DOWNLOAD_MODE="${LEIKWAN_GITHUB_DOWNLOAD_MODE:-mirror-first}"
+LEIKWAN_GITHUB_MIRRORS_DEFAULT="${LEIKWAN_GITHUB_MIRRORS_DEFAULT:-https://gh-proxy.com/,https://gh.llkk.cc/,https://gh.ddlc.top/,https://ghproxy.net/,https://mirror.ghproxy.com/,https://cf.ghproxy.cc/,https://gh.api.99988866.xyz/,https://github.akams.cn/}"
 INSTALL_PATH="/root/leikwan-toolkit.sh"
 SHORTCUT_PATH="/usr/local/bin/lq"
 SHORTCUT_PATH_UPPER="/usr/local/bin/LQ"
 RUN_MENU_MODE="auto"
 DEFAULT_GITHUB_MIRRORS=(
+  "https://gh-proxy.com/"
   "https://gh.llkk.cc/"
   "https://gh.ddlc.top/"
-  "https://gh-proxy.com/"
   "https://ghproxy.net/"
+  "https://mirror.ghproxy.com/"
+  "https://cf.ghproxy.cc/"
+  "https://gh.api.99988866.xyz/"
+  "https://github.akams.cn/"
 )
 
 ok() { echo "[OK] $*"; }
 info() { echo "[INFO] $*"; }
 warn() { echo "[WARN] $*"; }
+error() { echo "[ERROR] $*" >&2; }
 fail() { echo "[FAIL] $*" >&2; }
 
 usage() {
@@ -45,6 +52,35 @@ trim_spaces() {
   value="${value#"${value%%[![:space:]]*}"}"
   value="${value%"${value##*[![:space:]]}"}"
   printf '%s' "$value"
+}
+
+github_download_mode() {
+  local mode="${LEIKWAN_GITHUB_DOWNLOAD_MODE:-mirror-first}"
+  case "$mode" in
+    mirror-first|origin-first) printf '%s' "$mode" ;;
+    *)
+      warn "LEIKWAN_GITHUB_DOWNLOAD_MODE 无效：${mode}，使用 mirror-first。"
+      printf '%s' "mirror-first"
+      ;;
+  esac
+}
+
+github_mirror_values() {
+  local mirrors="${LEIKWAN_GITHUB_MIRRORS:-${LEIKWAN_GITHUB_MIRROR:-}}" mirror
+  local -a mirror_list=()
+  mirrors="${mirrors//;/,}"
+  if [[ -n "$mirrors" ]]; then
+    IFS=',' read -r -a mirror_list <<<"$mirrors"
+  elif [[ -n "${LEIKWAN_GITHUB_MIRRORS_DEFAULT:-}" ]]; then
+    IFS=',' read -r -a mirror_list <<<"$LEIKWAN_GITHUB_MIRRORS_DEFAULT"
+  else
+    mirror_list=("${DEFAULT_GITHUB_MIRRORS[@]}")
+  fi
+  for mirror in "${mirror_list[@]}"; do
+    mirror="$(trim_spaces "$mirror")"
+    [[ -n "$mirror" ]] || continue
+    printf '%s\n' "$mirror"
+  done
 }
 
 github_raw_to_github_url() {
@@ -77,21 +113,23 @@ mirror_url_for() {
 }
 
 github_url_candidates() {
-  local raw_url="$1" mirrors mirror candidate seen_line
-  local -a mirror_list=() seen=()
-  seen+=("$raw_url")
-  printf '%s\n' "$raw_url"
-  mirrors="${LEIKWAN_GITHUB_MIRRORS:-${LEIKWAN_GITHUB_MIRROR:-}}"
-  mirrors="${mirrors//;/,}"
-  if [[ -n "$mirrors" ]]; then
-    IFS=',' read -r -a mirror_list <<<"$mirrors"
-  else
-    mirror_list=("${DEFAULT_GITHUB_MIRRORS[@]}")
-  fi
-  for mirror in "${mirror_list[@]}"; do
-    mirror="$(trim_spaces "$mirror")"
+  local raw_url="$1" mode mirror candidate seen_line
+  local -a mirrors=() ordered=() seen=()
+  mode="$(github_download_mode)"
+  while IFS= read -r mirror; do
     [[ -n "$mirror" ]] || continue
     candidate="$(mirror_url_for "$mirror" "$raw_url")"
+    mirrors+=("$candidate")
+  done < <(github_mirror_values)
+  if [[ "$mode" == "origin-first" ]]; then
+    ordered+=("$raw_url")
+    ordered+=("${mirrors[@]}")
+  else
+    ordered+=("${mirrors[@]}")
+    ordered+=("$raw_url")
+  fi
+  for candidate in "${ordered[@]}"; do
+    [[ -n "$candidate" ]] || continue
     for seen_line in "${seen[@]}"; do
       [[ "$seen_line" == "$candidate" ]] && continue 2
     done
@@ -100,36 +138,58 @@ github_url_candidates() {
   done
 }
 
-download_with_fallback() {
-  local raw_url="$1" dest_file="$2" candidate tmp first=1
+github_candidate_kind() {
+  local candidate="$1" raw_url="$2"
+  if [[ "$candidate" == "$raw_url" ]]; then
+    printf '%s' "origin"
+  else
+    printf '%s' "mirror"
+  fi
+}
+
+download_github_with_mirrors() {
+  local raw_url="$1" dest_file="$2" type="${3:-raw}" mode candidate kind tmp
+  local connect_timeout max_time
+  mode="$(github_download_mode)"
   tmp="${dest_file}.tmp.$$"
   rm -f "$tmp"
+  info "GitHub 下载策略：${mode}"
   while IFS= read -r candidate; do
     [[ -n "$candidate" ]] || continue
-    if (( first == 1 )); then
-      info "正在尝试下载：${candidate}"
-    else
+    kind="$(github_candidate_kind "$candidate" "$raw_url")"
+    if [[ "$kind" == "mirror" ]]; then
       info "正在尝试镜像：${candidate}"
+    else
+      info "正在尝试 GitHub 官方：${candidate}"
     fi
-    if curl -fL --retry 2 --retry-delay 2 --connect-timeout 15 --max-time 120 -o "$tmp" "$candidate"; then
+    case "$type" in
+      release|large) connect_timeout=10; max_time=120 ;;
+      api|raw|small|sha256|*) connect_timeout=8; max_time=30 ;;
+    esac
+    if [[ "$kind" == "origin" && ( "$type" == "release" || "$type" == "large" ) ]]; then
+      connect_timeout=8
+      max_time=60
+    fi
+    if curl -fL --retry 0 --connect-timeout "$connect_timeout" --max-time "$max_time" -o "$tmp" "$candidate"; then
       mv -f "$tmp" "$dest_file"
-      if (( first == 1 )); then
-        ok "下载成功：${candidate}"
-      else
+      if [[ "$kind" == "mirror" ]]; then
         ok "镜像下载成功：${candidate}"
+      else
+        ok "GitHub 官方下载成功：${candidate}"
       fi
       return 0
     fi
-    if (( first == 1 )); then
-      warn "GitHub 直连失败，正在自动切换镜像。"
-    else
-      warn "镜像下载失败，尝试下一个地址。"
-    fi
-    first=0
+    rm -f "$tmp"
+    warn "当前下载源失败，正在切换下一个源。"
   done < <(github_url_candidates "$raw_url")
   rm -f "$tmp"
-  fail "所有镜像失败，无法下载：${raw_url}"
+  error "所有 GitHub 下载源均失败。"
   return 1
+}
+
+download_with_fallback() {
+  local raw_url="$1" dest_file="$2" type="${3:-raw}"
+  download_github_with_mirrors "$raw_url" "$dest_file" "$type"
 }
 
 try_install_jq() {
@@ -206,4 +266,6 @@ main() {
   maybe_run_menu
 }
 
-main "$@"
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+  main "$@"
+fi

@@ -61,11 +61,14 @@ echo "Package: ${PACKAGE_PATH}"
 echo "SHA256:  ${SHA_PATH}"
 echo
 echo "安全一键安装："
-echo "curl -fsSL -o /tmp/lq-bootstrap.sh https://raw.githubusercontent.com/ike-sh/leikwan-toolkit/main/scripts/bootstrap.sh && bash /tmp/lq-bootstrap.sh && lq init"
+echo "curl -fsSL -o /tmp/lq-bootstrap.sh https://raw.githubusercontent.com/ike-sh/leikwan-toolkit/main/scripts/bootstrap.sh"
+echo "bash /tmp/lq-bootstrap.sh"
 echo
-echo "管道安装（只安装，不自动进菜单）："
-echo "curl -fsSL https://raw.githubusercontent.com/ike-sh/leikwan-toolkit/main/scripts/bootstrap.sh | bash"
-echo "lq init"
+echo "国内推荐安装："
+echo "export LEIKWAN_GITHUB_DOWNLOAD_MODE=mirror-first"
+echo "export LEIKWAN_GITHUB_MIRRORS=\"https://gh-proxy.com/,https://gh.llkk.cc/,https://gh.ddlc.top/,https://ghproxy.net/,https://mirror.ghproxy.com/,https://cf.ghproxy.cc/,https://gh.api.99988866.xyz/,https://github.akams.cn/\""
+echo "curl -fsSL -o /tmp/lq-bootstrap.sh https://gh-proxy.com/https://raw.githubusercontent.com/ike-sh/leikwan-toolkit/main/scripts/bootstrap.sh"
+echo "bash /tmp/lq-bootstrap.sh"
 echo
 echo "下载到本地再执行："
 echo "curl -fsSL -o /root/leikwan-toolkit.sh https://raw.githubusercontent.com/ike-sh/leikwan-toolkit/main/leikwan-toolkit.sh && chmod +x /root/leikwan-toolkit.sh && ln -sf /root/leikwan-toolkit.sh /usr/local/bin/lq && ln -sf /root/leikwan-toolkit.sh /usr/local/bin/LQ && lq init"

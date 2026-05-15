@@ -1,11 +1,13 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-TOOL_VERSION="1.4.5"
+TOOL_VERSION="1.4.6"
 RELEASE_CHANNEL="LTS"
 PROJECT_NAME="leikwan-toolkit"
 PROJECT_TITLE="利群快速组网工具"
 PROJECT_GITHUB="https://github.com/ike-sh/leikwan-toolkit"
+LEIKWAN_GITHUB_DOWNLOAD_MODE="${LEIKWAN_GITHUB_DOWNLOAD_MODE:-mirror-first}"
+LEIKWAN_GITHUB_MIRRORS_DEFAULT="${LEIKWAN_GITHUB_MIRRORS_DEFAULT:-https://gh-proxy.com/,https://gh.llkk.cc/,https://gh.ddlc.top/,https://ghproxy.net/,https://mirror.ghproxy.com/,https://cf.ghproxy.cc/,https://gh.api.99988866.xyz/,https://github.akams.cn/}"
 
 DRY_RUN=0
 VERBOSE_DOCTOR=0
@@ -77,6 +79,7 @@ ENTRIES_DIR="${STATE_DIR}/entries"
 FORWARDS_DIR="${STATE_DIR}/forwards"
 PBR_DIR="${STATE_DIR}/pbr"
 EASYTIER_DIR="${STATE_DIR}/easytier"
+DOWNLOAD_CACHE_DIR="${LEIKWAN_DOWNLOAD_CACHE_DIR:-/var/cache/leikwan-toolkit/downloads}"
 STATUS_DIR="${STATE_DIR}/status"
 SNAPSHOT_DIR="${STATE_DIR}/snapshots"
 AUTO_SNAPSHOT_DIR="${SNAPSHOT_DIR}/auto"
@@ -134,10 +137,14 @@ EASYTIER_VERSION="${EASYTIER_VERSION:-v2.4.5}"
 EASYTIER_CORE_BIN="/usr/local/bin/easytier-core"
 EASYTIER_CLI_BIN="/usr/local/bin/easytier-cli"
 DEFAULT_GITHUB_MIRRORS=(
+  "https://gh-proxy.com/"
   "https://gh.llkk.cc/"
   "https://gh.ddlc.top/"
-  "https://gh-proxy.com/"
   "https://ghproxy.net/"
+  "https://mirror.ghproxy.com/"
+  "https://cf.ghproxy.cc/"
+  "https://gh.api.99988866.xyz/"
+  "https://github.akams.cn/"
 )
 FAST_PORT_RANGE_START="8000"
 FAST_PORT_RANGE_END="9000"
@@ -872,13 +879,18 @@ ${PROJECT_NAME} $(tool_version_label)
   不部署后端协议，不生成代理客户端链接。
 
 一键安装：
-  curl -fsSL -o /tmp/lq-bootstrap.sh https://raw.githubusercontent.com/ike-sh/leikwan-toolkit/main/scripts/bootstrap.sh && bash /tmp/lq-bootstrap.sh && lq init
-  # 管道方式只安装，不自动进入菜单：
-  curl -fsSL https://raw.githubusercontent.com/ike-sh/leikwan-toolkit/main/scripts/bootstrap.sh | bash
-  lq init
+  curl -fsSL -o /tmp/lq-bootstrap.sh https://raw.githubusercontent.com/ike-sh/leikwan-toolkit/main/scripts/bootstrap.sh
+  bash /tmp/lq-bootstrap.sh
 
-如果 GitHub 下载慢，可设置：
-  export LEIKWAN_GITHUB_MIRRORS="https://gh.llkk.cc/,https://gh.ddlc.top/,https://gh-proxy.com/,https://ghproxy.net/"
+国内推荐：
+  export LEIKWAN_GITHUB_DOWNLOAD_MODE=mirror-first
+  export LEIKWAN_GITHUB_MIRRORS="${LEIKWAN_GITHUB_MIRRORS_DEFAULT}"
+  curl -fsSL -o /tmp/lq-bootstrap.sh https://gh-proxy.com/https://raw.githubusercontent.com/ike-sh/leikwan-toolkit/main/scripts/bootstrap.sh
+  bash /tmp/lq-bootstrap.sh
+
+GitHub 下载策略：
+  默认 LEIKWAN_GITHUB_DOWNLOAD_MODE=mirror-first，先尝试镜像池，官方 GitHub 兜底。
+  如需改回官方优先，可设置 LEIKWAN_GITHUB_DOWNLOAD_MODE=origin-first。
 EOF
 }
 
@@ -1707,18 +1719,29 @@ easytier_arch_family() {
 }
 
 easytier_asset_names() {
-  local version="$1" no_v="${1#v}" arch="$2"
+  local version="$1" no_v="${1#v}" with_v arch="$2"
+  with_v="v${no_v}"
   case "$arch" in
     x86_64)
       printf '%s\n' \
-        "easytier-linux-x86_64-${version}.zip" \
+        "easytier-linux-x86_64-${with_v}.zip" \
+        "easytier-linux-x86_64-${no_v}.zip" \
+        "easytier-linux-x86_64-${with_v}.tar.gz" \
+        "easytier-linux-x86_64-${no_v}.tar.gz" \
+        "easytier-linux-x86_64-${with_v}.tgz" \
+        "easytier-linux-x86_64-${no_v}.tgz" \
         "easytier-linux-amd64-${version}.zip" \
         "easytier_${no_v}_linux_amd64.tar.gz" \
         "easytier-${version}-linux-amd64.tar.gz"
       ;;
     aarch64)
       printf '%s\n' \
-        "easytier-linux-aarch64-${version}.zip" \
+        "easytier-linux-aarch64-${with_v}.zip" \
+        "easytier-linux-aarch64-${no_v}.zip" \
+        "easytier-linux-aarch64-${with_v}.tar.gz" \
+        "easytier-linux-aarch64-${no_v}.tar.gz" \
+        "easytier-linux-aarch64-${with_v}.tgz" \
+        "easytier-linux-aarch64-${no_v}.tgz" \
         "easytier-linux-arm64-${version}.zip" \
         "easytier_${no_v}_linux_arm64.tar.gz" \
         "easytier-${version}-linux-arm64.tar.gz"
@@ -1730,13 +1753,10 @@ dl_info() { printf '[INFO] %s\n' "$*" >&2; }
 dl_warn() { printf '[WARN] %s\n' "$*" >&2; }
 dl_ok() { printf '[OK] %s\n' "$*" >&2; }
 dl_fail() { printf '[FAIL] %s\n' "$*" >&2; }
+dl_error() { printf '[ERROR] %s\n' "$*" >&2; }
 
 easytier_api_asset_url() {
   local version="$1" arch="$2" api re tmp result
-  if ! command -v curl >/dev/null 2>&1; then
-    dl_warn "未安装 curl，无法获取 GitHub release metadata。"
-    return 1
-  fi
   if ! command -v jq >/dev/null 2>&1; then
     dl_warn "未安装 jq，跳过 GitHub release metadata，将使用内置候选 URL。"
     return 1
@@ -1748,31 +1768,8 @@ easytier_api_asset_url() {
     *) return 1 ;;
   esac
   tmp="$(mktemp)"
-  local candidate first=1 fetched=0
-  while IFS= read -r candidate; do
-    [[ -n "$candidate" ]] || continue
-    if (( first == 1 )); then
-      dl_info "正在获取 EasyTier release 信息：${candidate}"
-    else
-      dl_info "正在尝试镜像：${candidate}"
-    fi
-    if curl -fsSL --connect-timeout 10 --max-time 30 -H 'Accept: application/vnd.github+json' -o "$tmp" "$candidate"; then
-      if (( first == 1 )); then
-        dl_ok "已获取 release 信息。"
-      else
-        dl_ok "镜像下载成功：${candidate}"
-      fi
-      fetched=1
-      break
-    fi
-    if (( first == 1 )); then
-      dl_warn "GitHub 直连失败，正在自动切换镜像。"
-    else
-      dl_warn "镜像下载失败，尝试下一个地址。"
-    fi
-    first=0
-  done < <(github_url_candidates "$api")
-  if (( fetched == 0 )); then
+  dl_info "正在获取 EasyTier release 信息：${api}"
+  if ! download_github_with_mirrors "$api" "$tmp" api; then
     dl_warn "无法获取 GitHub release metadata，将使用内置候选 URL。"
     rm -f "$tmp"
     return 1
@@ -1791,6 +1788,35 @@ trim_spaces() {
   value="${value#"${value%%[![:space:]]*}"}"
   value="${value%"${value##*[![:space:]]}"}"
   printf '%s' "$value"
+}
+
+github_download_mode() {
+  local mode="${LEIKWAN_GITHUB_DOWNLOAD_MODE:-mirror-first}"
+  case "$mode" in
+    mirror-first|origin-first) printf '%s' "$mode" ;;
+    *)
+      dl_warn "LEIKWAN_GITHUB_DOWNLOAD_MODE 无效：${mode}，使用 mirror-first。"
+      printf '%s' "mirror-first"
+      ;;
+  esac
+}
+
+github_mirror_values() {
+  local mirrors="${LEIKWAN_GITHUB_MIRRORS:-${LEIKWAN_GITHUB_MIRROR:-}}" mirror
+  local -a mirror_list=()
+  mirrors="${mirrors//;/,}"
+  if [[ -n "$mirrors" ]]; then
+    IFS=',' read -r -a mirror_list <<<"$mirrors"
+  elif [[ -n "${LEIKWAN_GITHUB_MIRRORS_DEFAULT:-}" ]]; then
+    IFS=',' read -r -a mirror_list <<<"$LEIKWAN_GITHUB_MIRRORS_DEFAULT"
+  else
+    mirror_list=("${DEFAULT_GITHUB_MIRRORS[@]}")
+  fi
+  for mirror in "${mirror_list[@]}"; do
+    mirror="$(trim_spaces "$mirror")"
+    [[ -n "$mirror" ]] || continue
+    printf '%s\n' "$mirror"
+  done
 }
 
 github_raw_to_github_url() {
@@ -1823,21 +1849,23 @@ mirror_url_for() {
 }
 
 github_url_candidates() {
-  local raw_url="$1" mirrors mirror candidate seen_line
-  local -a mirror_list=() seen=()
-  seen+=("$raw_url")
-  printf '%s\n' "$raw_url"
-  mirrors="${LEIKWAN_GITHUB_MIRRORS:-${LEIKWAN_GITHUB_MIRROR:-}}"
-  mirrors="${mirrors//;/,}"
-  if [[ -n "$mirrors" ]]; then
-    IFS=',' read -r -a mirror_list <<<"$mirrors"
-  else
-    mirror_list=("${DEFAULT_GITHUB_MIRRORS[@]}")
-  fi
-  for mirror in "${mirror_list[@]}"; do
-    mirror="$(trim_spaces "$mirror")"
+  local raw_url="$1" mode mirror candidate seen_line
+  local -a mirrors=() ordered=() seen=()
+  mode="$(github_download_mode)"
+  while IFS= read -r mirror; do
     [[ -n "$mirror" ]] || continue
     candidate="$(mirror_url_for "$mirror" "$raw_url")"
+    mirrors+=("$candidate")
+  done < <(github_mirror_values)
+  if [[ "$mode" == "origin-first" ]]; then
+    ordered+=("$raw_url")
+    ordered+=("${mirrors[@]}")
+  else
+    ordered+=("${mirrors[@]}")
+    ordered+=("$raw_url")
+  fi
+  for candidate in "${ordered[@]}"; do
+    [[ -n "$candidate" ]] || continue
     for seen_line in "${seen[@]}"; do
       [[ "$seen_line" == "$candidate" ]] && continue 2
     done
@@ -1846,42 +1874,158 @@ github_url_candidates() {
   done
 }
 
-download_with_fallback() {
-  local raw_url="$1" dest_file="$2" candidate tmp timeout first=1
-  timeout="${LEIKWAN_DOWNLOAD_TIMEOUT:-15}"
-  tmp="${dest_file}.tmp.$$"
-  rm -f "$tmp"
-  while IFS= read -r candidate; do
-    [[ -n "$candidate" ]] || continue
-    if (( first == 1 )); then
-      dl_info "正在尝试下载：${candidate}"
-    else
-      dl_info "正在尝试镜像：${candidate}"
-    fi
-    if curl -fL --retry 1 --connect-timeout "$timeout" --max-time "$timeout" -o "$tmp" "$candidate"; then
-      mv -f "$tmp" "$dest_file"
-      if (( first == 1 )); then
-        dl_ok "下载成功：${candidate}"
+github_candidate_kind() {
+  local candidate="$1" raw_url="$2"
+  if [[ "$candidate" == "$raw_url" ]]; then
+    printf '%s' "origin"
+  else
+    printf '%s' "mirror"
+  fi
+}
+
+github_type_timeouts() {
+  local type="$1" kind="$2"
+  case "$type" in
+    large|release)
+      if [[ "$kind" == "origin" ]]; then
+        printf '%s\t%s\t%s\t%s\n' 8 60 20 10240
       else
-        dl_ok "镜像下载成功：${candidate}"
+        printf '%s\t%s\t%s\t%s\n' 10 120 30 10240
       fi
-      return 0
+      ;;
+    api|raw|small|sha256|*)
+      printf '%s\t%s\t%s\t%s\n' 8 30 "" ""
+      ;;
+  esac
+}
+
+downloaded_file_looks_like_html() {
+  local file="$1"
+  [[ -s "$file" ]] || return 1
+  LC_ALL=C head -c 512 "$file" 2>/dev/null | grep -Eiq '<!doctype[[:space:]]+html|<html|<title>|</html>'
+}
+
+github_download_output_valid() {
+  local file="$1" type="$2" source_url="$3" min_bytes="${LEIKWAN_DOWNLOAD_MIN_BYTES:-0}" size
+  if [[ ! -s "$file" ]]; then
+    dl_warn "下载结果为空，继续尝试下一个源。"
+    return 1
+  fi
+  if [[ "$type" == "large" || "$type" == "release" ]]; then
+    if downloaded_file_looks_like_html "$file"; then
+      dl_warn "下载结果疑似 HTML 错误页，继续尝试下一个源。"
+      return 1
     fi
-    if (( first == 1 )); then
-      dl_warn "GitHub 直连失败，正在自动切换镜像。"
-    else
-      dl_warn "镜像下载失败，尝试下一个地址。"
+  fi
+  if [[ "$min_bytes" =~ ^[0-9]+$ ]] && (( min_bytes > 0 )); then
+    size="$(wc -c <"$file")"
+    if (( size < min_bytes )); then
+      dl_warn "下载文件小于 $((min_bytes / 1024 / 1024))MB，判定为坏包，继续尝试下一个源。"
+      return 1
     fi
-    first=0
-  done < <(github_url_candidates "$raw_url")
-  rm -f "$tmp"
-  dl_warn "所有镜像失败，无法下载：${raw_url}"
+  fi
+  if [[ "${LEIKWAN_DOWNLOAD_VALIDATE_ARCHIVE:-0}" == "1" ]]; then
+    if ! declare -F archive_integrity_ok >/dev/null 2>&1; then
+      dl_warn "缺少压缩包校验函数，继续尝试下一个源。"
+      return 1
+    fi
+    if ! archive_integrity_ok "$file" "$source_url"; then
+      dl_warn "压缩包完整性校验失败，继续尝试下一个源。"
+      return 1
+    fi
+  fi
+}
+
+github_probe_source() {
+  local url="$1" kind="$2" type="$3" probe_tmp
+  [[ "$type" == "large" || "$type" == "release" ]] || return 0
+  command -v curl >/dev/null 2>&1 || return 0
+  if curl -fsSLI --connect-timeout 5 --max-time 8 -o /dev/null "$url" >/dev/null 2>&1; then
+    [[ "$kind" == "mirror" ]] && dl_info "镜像预检通过：${url}"
+    return 0
+  fi
+  probe_tmp="$(mktemp)"
+  if curl -fsSL --range 0-1023 --connect-timeout 5 --max-time 10 -o "$probe_tmp" "$url" >/dev/null 2>&1; then
+    rm -f "$probe_tmp"
+    [[ "$kind" == "mirror" ]] && dl_info "镜像预检通过：${url}"
+    return 0
+  fi
+  rm -f "$probe_tmp"
+  if [[ "$kind" == "mirror" ]]; then
+    dl_warn "镜像预检失败，跳过：${url}"
+  else
+    dl_warn "GitHub 官方预检失败，跳过：${url}"
+  fi
   return 1
 }
 
+github_fetch_to_file() {
+  local url="$1" output="$2" type="$3" kind="$4" mode="$5"
+  local connect_timeout max_time speed_time speed_limit
+  IFS=$'\t' read -r connect_timeout max_time speed_time speed_limit < <(github_type_timeouts "$type" "$kind" "$mode")
+  if command -v curl >/dev/null 2>&1; then
+    if [[ -n "$speed_time" && -n "$speed_limit" ]]; then
+      curl -fL --retry 0 --connect-timeout "$connect_timeout" --max-time "$max_time" --speed-time "$speed_time" --speed-limit "$speed_limit" -o "$output" "$url"
+    else
+      curl -fL --retry 0 --connect-timeout "$connect_timeout" --max-time "$max_time" -o "$output" "$url"
+    fi
+    return $?
+  fi
+  if command -v wget >/dev/null 2>&1; then
+    wget --timeout=30 --tries=1 -O "$output" "$url"
+    return $?
+  fi
+  dl_error "缺少 curl 或 wget，无法下载 GitHub 资源。"
+  return 127
+}
+
+download_github_with_mirrors() {
+  local raw_url="$1" dest_file="$2" type="${3:-small}" mode candidate kind tmp
+  mode="$(github_download_mode)"
+  tmp="${dest_file}.tmp.$$"
+  rm -f "$tmp"
+  dl_info "GitHub 下载策略：${mode}"
+  while IFS= read -r candidate; do
+    [[ -n "$candidate" ]] || continue
+    kind="$(github_candidate_kind "$candidate" "$raw_url")"
+    if [[ "$kind" == "mirror" ]]; then
+      dl_info "正在尝试镜像：${candidate}"
+    else
+      dl_info "正在尝试 GitHub 官方：${candidate}"
+    fi
+    if ! github_probe_source "$candidate" "$kind" "$type"; then
+      dl_warn "当前下载源失败，正在切换下一个源。"
+      continue
+    fi
+    rm -f "$tmp"
+    if github_fetch_to_file "$candidate" "$tmp" "$type" "$kind" "$mode" &&
+       github_download_output_valid "$tmp" "$type" "$candidate"; then
+      mv -f "$tmp" "$dest_file"
+      GITHUB_DOWNLOAD_LAST_SOURCE="$candidate"
+      GITHUB_DOWNLOAD_LAST_KIND="$kind"
+      if [[ "$kind" == "mirror" ]]; then
+        dl_ok "镜像下载成功：${candidate}"
+      else
+        dl_ok "GitHub 官方下载成功：${candidate}"
+      fi
+      return 0
+    fi
+    rm -f "$tmp"
+    dl_warn "当前下载源失败，正在切换下一个源。"
+  done < <(github_url_candidates "$raw_url")
+  rm -f "$tmp"
+  dl_error "所有 GitHub 下载源均失败。"
+  return 1
+}
+
+download_with_fallback() {
+  local raw_url="$1" dest_file="$2" type="${3:-small}"
+  download_github_with_mirrors "$raw_url" "$dest_file" "$type"
+}
+
 download_github_asset() {
-  local raw_url="$1" dest_file="$2"
-  download_with_fallback "$raw_url" "$dest_file"
+  local raw_url="$1" dest_file="$2" type="${3:-release}"
+  download_github_with_mirrors "$raw_url" "$dest_file" "$type"
 }
 
 normalize_version() {
@@ -1916,34 +2060,10 @@ version_gt() {
 }
 
 update_latest_release() {
-  local api tmp tag version effective candidate first fetched
-  command -v curl >/dev/null 2>&1 || { fail "缺少 curl，无法检查 GitHub Release。"; return 1; }
+  local api tmp tag version effective candidate mode kind
   api="https://api.github.com/repos/${UPDATE_REPO}/releases/latest"
   tmp="$(mktemp)"
-  first=1
-  fetched=0
-  while IFS= read -r candidate; do
-    [[ -n "$candidate" ]] || continue
-    if (( first == 1 )); then
-      info "正在查询 GitHub Release：${candidate}"
-    else
-      info "正在尝试镜像：${candidate}"
-    fi
-    if curl -fsSL --connect-timeout 10 --max-time 30 -H 'Accept: application/vnd.github+json' -o "$tmp" "$candidate"; then
-      fetched=1
-      if (( first == 0 )); then
-        ok "镜像下载成功：${candidate}"
-      fi
-      break
-    fi
-    if (( first == 1 )); then
-      warn "GitHub 直连失败，正在自动切换镜像。"
-    else
-      warn "镜像下载失败，尝试下一个地址。"
-    fi
-    first=0
-  done < <(github_url_candidates "$api")
-  if (( fetched == 1 )); then
+  if download_github_with_mirrors "$api" "$tmp" api; then
     if command -v jq >/dev/null 2>&1; then
       tag="$(jq -r '.tag_name // empty' "$tmp" 2>/dev/null || true)"
     else
@@ -1952,17 +2072,19 @@ update_latest_release() {
   fi
   rm -f "$tmp"
   if [[ -z "${tag:-}" ]]; then
-    first=1
+    mode="$(github_download_mode)"
+    dl_info "GitHub 下载策略：${mode}"
     while IFS= read -r candidate; do
       [[ -n "$candidate" ]] || continue
-      effective="$(curl -fsSLI --connect-timeout 10 --max-time 30 -o /dev/null -w '%{url_effective}' "$candidate" 2>/dev/null || true)"
-      [[ -n "$effective" ]] && break
-      if (( first == 1 )); then
-        warn "GitHub 直连失败，正在自动切换镜像。"
+      kind="$(github_candidate_kind "$candidate" "https://github.com/${UPDATE_REPO}/releases/latest")"
+      if [[ "$kind" == "mirror" ]]; then
+        dl_info "正在尝试镜像：${candidate}"
       else
-        warn "镜像下载失败，尝试下一个地址。"
+        dl_info "正在尝试 GitHub 官方：${candidate}"
       fi
-      first=0
+      effective="$(curl -fsSLI --retry 0 --connect-timeout 8 --max-time 30 -o /dev/null -w '%{url_effective}' "$candidate" 2>/dev/null || true)"
+      [[ -n "$effective" ]] && break
+      dl_warn "当前下载源失败，正在切换下一个源。"
     done < <(github_url_candidates "https://github.com/${UPDATE_REPO}/releases/latest")
     tag="${effective##*/}"
   fi
@@ -1977,34 +2099,8 @@ update_release_asset_url() {
 }
 
 update_download_asset() {
-  local raw_url="$1" dest_file="$2" candidate tmp mirror seen_line
-  local -a seen=()
-  tmp="${dest_file}.tmp.$$"
-  rm -f "$tmp"
-  info "正在下载：${raw_url}"
-  if curl -fL --retry 1 --connect-timeout 15 --max-time 120 -o "$tmp" "$raw_url"; then
-    mv -f "$tmp" "$dest_file"
-    ok "下载成功：${raw_url}"
-    return 0
-  fi
-  warn "GitHub 直连失败，正在自动切换镜像。"
-  while IFS= read -r candidate; do
-    [[ -n "$candidate" && "$candidate" != "$raw_url" ]] || continue
-    for seen_line in "${seen[@]}"; do
-      [[ "$seen_line" == "$candidate" ]] && continue 2
-    done
-    seen+=("$candidate")
-    info "正在尝试镜像：${candidate}"
-    if curl -fL --retry 1 --connect-timeout 15 --max-time 120 -o "$tmp" "$candidate"; then
-      mv -f "$tmp" "$dest_file"
-      ok "镜像下载成功：${candidate}"
-      return 0
-    fi
-    warn "镜像下载失败，尝试下一个地址。"
-  done < <(github_url_candidates "$raw_url")
-  rm -f "$tmp"
-  fail "所有镜像失败，无法下载最新 release，请检查网络或设置 LEIKWAN_GITHUB_MIRRORS。"
-  return 1
+  local raw_url="$1" dest_file="$2" type="${3:-release}"
+  download_github_with_mirrors "$raw_url" "$dest_file" "$type"
 }
 
 file_sha256() {
@@ -2332,8 +2428,8 @@ update_run() {
     archive="${tmp}/leikwan-toolkit-${latest_version}.tar.gz"
     sha_file="${archive}.sha256"
     new_script="${tmp}/leikwan-toolkit.sh"
-    update_download_asset "$package_url" "$archive" || exit 1
-    update_download_asset "$sha_url" "$sha_file" || exit 1
+    update_download_asset "$package_url" "$archive" release || exit 1
+    update_download_asset "$sha_url" "$sha_file" sha256 || exit 1
     update_verify_sha256 "$archive" "$sha_file" || exit 1
     update_prepare_script_from_archive "$archive" "$new_script" || exit 1
     bash -n "$new_script" || { fail "新脚本 bash -n 校验失败，已取消更新。"; exit 1; }
@@ -2479,65 +2575,79 @@ archive_integrity_ok() {
   esac
 }
 
+easytier_cache_path_for_url() {
+  local url="$1" name
+  name="${url##*/}"
+  [[ -n "$name" && "$name" != "$url" ]] || name="easytier-linux-${EASYTIER_VERSION}.pkg"
+  printf '%s/%s\n' "$DOWNLOAD_CACHE_DIR" "$name"
+}
+
+easytier_cached_archive_valid() {
+  local cache_file="$1" source="$2"
+  [[ -f "$cache_file" ]] || return 1
+  if (( $(wc -c <"$cache_file") < 10485760 )); then
+    dl_warn "已缓存 EasyTier 安装包小于 10MB，删除后重新下载：${cache_file}"
+    rm -f "$cache_file"
+    return 1
+  fi
+  if ! archive_integrity_ok "$cache_file" "$source"; then
+    dl_warn "已缓存 EasyTier 安装包校验失败，删除后重新下载：${cache_file}"
+    rm -f "$cache_file"
+    return 1
+  fi
+  return 0
+}
+
+easytier_try_cached_archive() {
+  local raw_url="$1" dest_file="$2" cache_file
+  cache_file="$(easytier_cache_path_for_url "$raw_url")"
+  if easytier_cached_archive_valid "$cache_file" "$raw_url"; then
+    cp -a "$cache_file" "$dest_file"
+    EASYTIER_ARCHIVE_CACHE_PATH="$cache_file"
+    EASYTIER_ARCHIVE_FROM_CACHE=1
+    dl_ok "复用已缓存 EasyTier 安装包：${cache_file}"
+    return 0
+  fi
+  return 1
+}
+
+easytier_store_archive_cache() {
+  local archive="$1" raw_url="$2" cache_file
+  [[ -f "$archive" ]] || return 0
+  cache_file="$(easytier_cache_path_for_url "$raw_url")"
+  mkdir -p "$DOWNLOAD_CACHE_DIR" 2>/dev/null || return 0
+  if cp -f "$archive" "$cache_file" 2>/dev/null; then
+    EASYTIER_ARCHIVE_CACHE_PATH="$cache_file"
+    EASYTIER_ARCHIVE_FROM_CACHE=0
+  fi
+}
+
 download_large_archive_checked() {
-  local raw_url="$1" dest_file="$2" candidate part size_mb integrity_rc first=1
+  local raw_url="$1" dest_file="$2" part size_mb
   part="${dest_file}.part"
   rm -f "$part"
-  while IFS= read -r candidate; do
-    [[ -n "$candidate" ]] || continue
-    if [[ "$candidate" == *.zip ]] && ! command -v unzip >/dev/null 2>&1; then
-      dl_warn "当前系统缺少 unzip，暂不尝试 zip 包：${candidate}"
-      continue
-    fi
-    if [[ "$candidate" == *.tar.gz || "$candidate" == *.tgz ]] && ! command -v tar >/dev/null 2>&1; then
-      dl_warn "当前系统缺少 tar，暂不尝试 tar.gz 包：${candidate}"
-      continue
-    fi
-    EASYTIER_DOWNLOAD_ATTEMPTS+=("$candidate")
-    if (( first == 1 )); then
-      dl_info "正在下载 EasyTier：${candidate}"
-    else
-      dl_info "正在尝试镜像：${candidate}"
-    fi
-    if curl -fL --connect-timeout 15 --max-time 600 --retry 3 --retry-delay 3 --retry-connrefused -C - -o "$part" "$candidate"; then
-      if [[ ! -s "$part" ]]; then
-        dl_warn "下载结果为空，继续尝试下一个地址。"
-        rm -f "$part"
-        continue
-      fi
-      if (( $(wc -c <"$part") < 10485760 )); then
-        dl_warn "下载文件小于 10MB，判定为坏包，继续尝试下一个地址。"
-        rm -f "$part"
-        continue
-      fi
-      if archive_integrity_ok "$part" "$candidate"; then
-        :
-      else
-        integrity_rc=$?
-        if (( integrity_rc == 2 )); then
-          dl_warn "缺少校验工具，继续尝试其它格式或本地安装方式。"
-        else
-          dl_warn "压缩包完整性校验失败，继续尝试下一个地址。"
-        fi
-        rm -f "$part"
-        continue
-      fi
-      mv -f "$part" "$dest_file"
-      size_mb="$(du -m "$dest_file" | awk '{print $1}')"
-      if (( first == 1 )); then
-        dl_ok "EasyTier 下载成功：${dest_file}，大小 ${size_mb} MB"
-      else
-        dl_ok "镜像下载成功：${candidate}"
-      fi
-      return 0
-    fi
-    if (( first == 1 )); then
-      dl_warn "GitHub 直连失败，正在自动切换镜像。"
-    else
-      dl_warn "镜像下载失败，尝试下一个地址。"
-    fi
-    first=0
-  done < <(github_url_candidates "$raw_url")
+  if [[ "$raw_url" == *.zip ]] && ! command -v unzip >/dev/null 2>&1; then
+    dl_warn "当前系统缺少 unzip，暂不尝试 zip 包：${raw_url}"
+    return 1
+  fi
+  if [[ "$raw_url" == *.tar.gz || "$raw_url" == *.tgz ]] && ! command -v tar >/dev/null 2>&1; then
+    dl_warn "当前系统缺少 tar，暂不尝试 tar.gz 包：${raw_url}"
+    return 1
+  fi
+  EASYTIER_DOWNLOAD_ATTEMPTS+=("$raw_url")
+  EASYTIER_ARCHIVE_CACHE_PATH=""
+  EASYTIER_ARCHIVE_FROM_CACHE=0
+  if [[ "${EASYTIER_SKIP_CACHE:-0}" != "1" ]] && easytier_try_cached_archive "$raw_url" "$dest_file"; then
+    return 0
+  fi
+  dl_info "正在下载 EasyTier：${raw_url}"
+  if LEIKWAN_DOWNLOAD_MIN_BYTES=10485760 LEIKWAN_DOWNLOAD_VALIDATE_ARCHIVE=1 download_github_with_mirrors "$raw_url" "$part" release; then
+    mv -f "$part" "$dest_file"
+    size_mb="$(du -m "$dest_file" | awk '{print $1}')"
+    dl_ok "EasyTier 下载成功：${dest_file}，大小 ${size_mb} MB"
+    easytier_store_archive_cache "$dest_file" "$raw_url"
+    return 0
+  fi
   rm -f "$part"
   return 1
 }
@@ -2588,10 +2698,11 @@ download_easytier_archive() {
   local dest="$1" version="$EASYTIER_VERSION" arch api_url release_base name url seen_url
   local urls=()
   EASYTIER_DOWNLOAD_ATTEMPTS=()
+  EASYTIER_ARCHIVE_CACHE_PATH=""
+  EASYTIER_ARCHIVE_FROM_CACHE=0
   arch="$(easytier_arch_family)" || return 1
   release_base="https://github.com/EasyTier/EasyTier/releases/download/${version}"
-  api_url="$(easytier_api_asset_url "$version" "$arch" || true)"
-  [[ -n "$api_url" && "$api_url" != "null" ]] && urls+=("$api_url")
+  dl_info "EasyTier 下载策略：$(github_download_mode)"
   while IFS= read -r name; do
     [[ -n "$name" ]] || continue
     url="${release_base}/${name}"
@@ -2606,6 +2717,18 @@ download_easytier_archive() {
       return 0
     fi
   done
+  api_url="$(easytier_api_asset_url "$version" "$arch" || true)"
+  if [[ -n "$api_url" && "$api_url" != "null" ]]; then
+    for seen_url in "${urls[@]}"; do
+      [[ "$seen_url" == "$api_url" ]] && api_url="" && break
+    done
+  fi
+  if [[ -n "$api_url" ]]; then
+    if download_large_archive_checked "$api_url" "$dest"; then
+      dl_ok "EasyTier 下载和校验完成。"
+      return 0
+    fi
+  fi
   dl_fail "EasyTier 自动下载失败。"
   if ((${#EASYTIER_DOWNLOAD_ATTEMPTS[@]} > 0)); then
     printf '已尝试：\n' >&2
@@ -2695,7 +2818,7 @@ install_easytier_binary() {
     return $?
   fi
   local tmpdir archive core cli list
-  confirm_summary "EasyTier 安装摘要" "版本：${EASYTIER_VERSION}\n目标：${EASYTIER_CORE_BIN} / ${EASYTIER_CLI_BIN}\n下载：LEIKWAN_GITHUB_MIRRORS / 内置镜像 / 官方 GitHub 轮询 + 本地包 fallback" || return 0
+  confirm_summary "EasyTier 安装摘要" "版本：${EASYTIER_VERSION}\n目标：${EASYTIER_CORE_BIN} / ${EASYTIER_CLI_BIN}\n下载：${LEIKWAN_GITHUB_DOWNLOAD_MODE:-mirror-first}，镜像池优先 / 官方 GitHub 兜底 + 本地包 fallback\n缓存：${DOWNLOAD_CACHE_DIR}" || return 0
   (( DRY_RUN == 1 )) && return 0
   tmpdir="$(mktemp -d)"
   archive="${tmpdir}/easytier.pkg"
@@ -2705,10 +2828,26 @@ install_easytier_binary() {
     return 1
   fi
   if ! extract_archive "$archive" "$tmpdir"; then
-    fail "EasyTier 安装包解压失败。"
-    archive_listing "$archive" >&2 || true
-    rm -rf "$tmpdir"
-    return 1
+    if [[ "${EASYTIER_ARCHIVE_FROM_CACHE:-0}" == "1" && -n "${EASYTIER_ARCHIVE_CACHE_PATH:-}" ]]; then
+      warn "缓存 EasyTier 安装包解压失败，删除缓存后重新下载：${EASYTIER_ARCHIVE_CACHE_PATH}"
+      rm -f "$EASYTIER_ARCHIVE_CACHE_PATH"
+      rm -rf "$tmpdir"
+      tmpdir="$(mktemp -d)"
+      archive="${tmpdir}/easytier.pkg"
+      if EASYTIER_SKIP_CACHE=1 download_easytier_archive "$archive" && extract_archive "$archive" "$tmpdir"; then
+        :
+      else
+        fail "EasyTier 安装包解压失败。"
+        archive_listing "$archive" >&2 || true
+        rm -rf "$tmpdir"
+        return 1
+      fi
+    else
+      fail "EasyTier 安装包解压失败。"
+      archive_listing "$archive" >&2 || true
+      rm -rf "$tmpdir"
+      return 1
+    fi
   fi
   core="$(find "$tmpdir" -type f -name easytier-core -perm -111 | head -n 1)"
   cli="$(find "$tmpdir" -type f -name easytier-cli -perm -111 | head -n 1)"

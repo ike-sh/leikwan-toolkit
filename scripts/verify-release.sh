@@ -69,6 +69,15 @@ bash tests/update-regression.sh
 section "package regression"
 bash tests/package-regression.sh
 
+section "GitHub mirror download regression"
+bash tests/github-mirror-download-regression.sh
+
+section "EasyTier mirror download regression"
+bash tests/easytier-download-mirror-regression.sh
+
+section "bootstrap mirror-first regression"
+bash tests/bootstrap-mirror-first-regression.sh
+
 section "uninstall regression"
 bash tests/uninstall-regression.sh
 

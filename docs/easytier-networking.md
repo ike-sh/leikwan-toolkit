@@ -33,19 +33,27 @@ EASYTIER_PORT=8301
 
 缺失时按以下流程安装：
 
-1. 通过 GitHub API 读取 release metadata，只用于定位 asset。
-2. 如果 API 失败或没有匹配 asset，构造确定性 Release URL。
-3. 对每个 EasyTier asset URL 轮询：用户自定义镜像、内置镜像、官方 GitHub。
-4. 下载到 `.part` 临时文件，支持断点续传。
+1. 默认 `LEIKWAN_GITHUB_DOWNLOAD_MODE=mirror-first`，先尝试镜像池，官方 GitHub 最后兜底。
+2. 先构造确定性 Release URL，不让 GitHub API 慢请求阻塞大文件下载。
+3. 每个 EasyTier asset URL 按镜像池、官方 GitHub 的顺序尝试，并做轻量预检。
+4. 单个源使用短超时和低速失败切源，不在慢源上重复 retry。
 5. 文件大小必须大于 10MB，且 `unzip -t` 或 `tar -tzf` 校验通过后才安装。
-6. 全部失败时，允许选择 `/root/easytier*.zip`、`/root/easytier*.tar.gz` 或当前目录本地包。
+6. 下载成功后缓存到 `/var/cache/leikwan-toolkit/downloads`，下次同版本优先复用。
+7. 如果所有确定性 URL 失败，GitHub API metadata 只作为辅助兜底。
+8. 全部失败时，允许选择 `/root/easytier*.zip`、`/root/easytier*.tar.gz` 或当前目录本地包。
 
 内置镜像只作为加速候选，不会成为唯一入口。官方 GitHub 始终保留为兜底候选。
 
 可自定义镜像：
 
 ```bash
-export LEIKWAN_GITHUB_MIRRORS="https://gh.llkk.cc/,https://gh.ddlc.top/,https://gh-proxy.com/,https://ghproxy.net/"
+export LEIKWAN_GITHUB_MIRRORS="https://gh-proxy.com/,https://gh.llkk.cc/,https://gh.ddlc.top/,https://ghproxy.net/,https://mirror.ghproxy.com/,https://cf.ghproxy.cc/,https://gh.api.99988866.xyz/,https://github.akams.cn/"
+```
+
+需要改回官方 GitHub 优先时：
+
+```bash
+export LEIKWAN_GITHUB_DOWNLOAD_MODE=origin-first
 ```
 
 如果下载仍失败：

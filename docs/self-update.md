@@ -54,10 +54,11 @@ lq --self-update
 国内网络访问 GitHub Release 较慢时可设置：
 
 ```bash
-export LEIKWAN_GITHUB_MIRRORS="https://gh.llkk.cc/,https://gh.ddlc.top/,https://gh-proxy.com/,https://ghproxy.net/"
+export LEIKWAN_GITHUB_DOWNLOAD_MODE=mirror-first
+export LEIKWAN_GITHUB_MIRRORS="https://gh-proxy.com/,https://gh.llkk.cc/,https://gh.ddlc.top/,https://ghproxy.net/,https://mirror.ghproxy.com/,https://cf.ghproxy.cc/,https://gh.api.99988866.xyz/,https://github.akams.cn/"
 ```
 
-脚本会优先尝试官方 Release URL；失败后再尝试镜像。
+1.4.6 起默认就是 `mirror-first`：先尝试镜像池，官方 GitHub 作为最后 fallback。需要改回官方优先时设置 `LEIKWAN_GITHUB_DOWNLOAD_MODE=origin-first`。release 包和 `.sha256` 都走同一套下载策略，sha256 校验仍然保留。
 
 ## 状态
 

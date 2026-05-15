@@ -34,6 +34,8 @@ bash tests/health-score-regression.sh
 bash tests/update-regression.sh
 bash tests/package-regression.sh
 bash tests/github-mirror-download-regression.sh
+bash tests/easytier-download-mirror-regression.sh
+bash tests/bootstrap-mirror-first-regression.sh
 bash tests/build-release-regression.sh
 bash tests/uninstall-regression.sh
 bash tests/lock-regression.sh
@@ -69,6 +71,8 @@ bash tests/health-score-regression.sh
 bash tests/update-regression.sh
 bash tests/package-regression.sh
 bash tests/github-mirror-download-regression.sh
+bash tests/easytier-download-mirror-regression.sh
+bash tests/bootstrap-mirror-first-regression.sh
 bash tests/build-release-regression.sh
 bash tests/uninstall-regression.sh
 bash tests/lock-regression.sh
@@ -78,7 +82,7 @@ bash tests/redaction-regression.sh
 - `smoke.sh`：基础语法、版本、帮助和关键 CLI 参数识别。
 - `cli-regression.sh`：只读 CLI 在空状态目录下不触发全局 trap。
 - `render-regression.sh`：模拟 TSV，检查表格、紧凑渲染和核心菜单渲染。
-- `final-menu-regression.sh`：检查 1.4.5 LTS 主菜单只暴露 6 个核心入口，DDNS 和高级维护菜单保持收敛。
+- `final-menu-regression.sh`：检查 1.4.6 LTS 主菜单只暴露 6 个核心入口，DDNS 和高级维护菜单保持收敛。
 - `final-readme-regression.sh`：检查 README 标明 LTS、域名解析变化自动刷新、默认不修改 DNS 记录和常用命令。
 - `role-detection-regression.sh`：检查 relay 不因 entries.tsv 被误判为 entry，真实混合部署才 WARN。
 - `doctor-reset-regression.sh`：检查 doctor 每次运行都重置 WARN / FAIL 聚合，不继承历史 last-doctor。
@@ -98,7 +102,9 @@ bash tests/redaction-regression.sh
 - `health-score-regression.sh`：检查健康度评分和 JSON 字段。
 - `update-regression.sh`：模拟运行进程版本与安装脚本版本不一致，检查 update check/status 和菜单 reload 提示。
 - `package-regression.sh`：检查 release 包内容边界。
-- `github-mirror-download-regression.sh`：检查 GitHub 直连失败后按镜像 URL fallback。
+- `github-mirror-download-regression.sh`：检查 GitHub 下载默认 mirror-first、origin-first 可切换、release / sha256 / raw / API 都走统一镜像函数。
+- `easytier-download-mirror-regression.sh`：检查 EasyTier release asset 默认镜像优先、短超时低速切源、zip/tar/tgz 候选、本地包 fallback 和缓存复用。
+- `bootstrap-mirror-first-regression.sh`：检查 bootstrap 默认 mirror-first、国内推荐命令和 `LEIKWAN_GITHUB_MIRRORS` 覆盖。
 - `build-release-regression.sh`：检查 `scripts/build-release.sh` 生成 tar.gz/sha256 且不包含 panel/controller/agent/web。
 - `uninstall-regression.sh`：检查普通 / 深度卸载菜单、dry-run 和卸载后状态友好输出。
 - `lock-regression.sh`：检查 stale lock 清理和锁占用时的友好拒绝。
