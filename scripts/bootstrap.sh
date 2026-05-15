@@ -54,6 +54,17 @@ trim_spaces() {
   printf '%s' "$value"
 }
 
+make_temp_file() {
+  local prefix="${1:-leikwan-bootstrap}" dir tmp
+  for dir in "${TMPDIR:-}" /tmp "${PWD}/.tmp"; do
+    [[ -n "$dir" ]] || continue
+    mkdir -p "$dir" 2>/dev/null || continue
+    [[ -w "$dir" ]] || continue
+    tmp="$(mktemp "${dir}/${prefix}.XXXXXX" 2>/dev/null)" && { printf '%s' "$tmp"; return 0; }
+  done
+  mktemp
+}
+
 github_download_mode() {
   local mode="${LEIKWAN_GITHUB_DOWNLOAD_MODE:-mirror-first}"
   case "$mode" in
@@ -222,7 +233,7 @@ install_tool() {
   command -v curl >/dev/null 2>&1 || { fail "缺少 curl，请先安装 curl。"; exit 1; }
   local tmp
   try_install_jq
-  tmp="$(mktemp)"
+  tmp="$(make_temp_file leikwan-bootstrap)"
   download_with_fallback "$RAW_SCRIPT_URL" "$tmp"
   install -m 755 "$tmp" "$INSTALL_PATH"
   rm -f "$tmp"

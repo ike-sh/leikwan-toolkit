@@ -4,7 +4,10 @@ set -Eeuo pipefail
 ROOT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
-TMP_DIR="$(mktemp -d)"
+# shellcheck source=/dev/null
+source "$ROOT_DIR/tests/test-lib.sh"
+
+TMP_DIR="$(test_mktemp_dir "$ROOT_DIR")"
 trap 'rm -rf "$TMP_DIR"' EXIT
 
 export LEIKWAN_STATE_DIR="${TMP_DIR}/state"
@@ -25,7 +28,7 @@ run_cli() {
     echo "$out" >&2
     exit 1
   fi
-  if grep -q "错误：脚本在第" <<<"$out"; then
+  if grep -q "错误：脚本在�? <<<"$out"; then
     echo "FAIL: global trap triggered: $*" >&2
     echo "$out" >&2
     exit 1
@@ -36,7 +39,7 @@ run_cli() {
 validate_json_cli() {
   local out
   out="$(bash leikwan-toolkit.sh "$@" 2>&1)"
-  if grep -q "错误：脚本在第" <<<"$out"; then
+  if grep -q "错误：脚本在�? <<<"$out"; then
     echo "FAIL: global trap triggered: $*" >&2
     echo "$out" >&2
     exit 1
@@ -93,7 +96,7 @@ cat >"${LEIKWAN_STATE_DIR}/forwards/forwards.tsv" <<'EOF'
 tw	10004	tw.example.test	52936	eth1	T_CN2	false	tw-target
 EOF
 port_out="$(bash leikwan-toolkit.sh port check 2>&1)"
-grep -q '\[INFO\].*已 disabled' <<<"$port_out" || {
+grep -q '\[INFO\].*�?disabled' <<<"$port_out" || {
   echo "FAIL: disabled port entries should be INFO" >&2
   echo "$port_out" >&2
   exit 1

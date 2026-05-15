@@ -11,6 +11,11 @@ SHA_PATH="${PACKAGE_PATH}.sha256"
 
 cd "$ROOT_DIR"
 
+if [[ -z "${TMPDIR:-}" || ! -w "${TMPDIR:-}" ]]; then
+  mkdir -p "$ROOT_DIR/.tmp"
+  export TMPDIR="$ROOT_DIR/.tmp"
+fi
+
 SHELLCHECK_TARGETS=(
   leikwan-toolkit.sh
   scripts/package-release.sh
@@ -49,9 +54,9 @@ bash scripts/check-redaction.sh
 tar -czf "$PACKAGE_PATH" -C "$DIST_DIR" "$PACKAGE_NAME"
 
 if command -v sha256sum >/dev/null 2>&1; then
-  sha256sum "$PACKAGE_PATH" >"$SHA_PATH"
+  (cd "$DIST_DIR" && sha256sum "${PACKAGE_NAME}.tar.gz" >"${PACKAGE_NAME}.tar.gz.sha256")
 elif command -v shasum >/dev/null 2>&1; then
-  shasum -a 256 "$PACKAGE_PATH" >"$SHA_PATH"
+  (cd "$DIST_DIR" && shasum -a 256 "${PACKAGE_NAME}.tar.gz" >"${PACKAGE_NAME}.tar.gz.sha256")
 else
   echo "FAIL: sha256sum or shasum not found" >&2
   exit 1

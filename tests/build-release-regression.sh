@@ -4,10 +4,13 @@ set -Eeuo pipefail
 ROOT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
+# shellcheck source=/dev/null
+source "$ROOT_DIR/tests/test-lib.sh"
+
 version="$(awk -F= '$1=="TOOL_VERSION" {gsub(/"/, "", $2); print $2; exit}' leikwan-toolkit.sh)"
 mkdir -p "$ROOT_DIR/.tmp"
-out="$(mktemp "$ROOT_DIR/.tmp/build-release-test.out.XXXXXX")"
-list="$(mktemp "$ROOT_DIR/.tmp/build-release-list.XXXXXX")"
+out="$(test_mktemp_file "$ROOT_DIR" "build-release-test.out.XXXXXX")"
+list="$(test_mktemp_file "$ROOT_DIR" "build-release-list.XXXXXX")"
 trap 'rm -f "$list" "$out"' EXIT
 
 bash scripts/build-release.sh "$version" >"$out"
@@ -33,5 +36,16 @@ if grep -Eq '(^|/)(panel|controller|agent|web|edge-tunnel-panel)(/|$)' "$list"; 
 fi
 
 grep -q "${pkg##*/}" "$sha"
+if grep -Eq '^[A-Fa-f0-9]{64}[[:space:]]+/' "$sha"; then
+  echo "FAIL: sha256 file contains absolute path" >&2
+  cat "$sha" >&2
+  exit 1
+fi
+absolute_path_pattern='/mnt/ho''st|/ho''me/|^[A-Fa-f0-9]{64}[[:space:]]+.*[\\/]'
+if grep -Eq "$absolute_path_pattern" "$sha"; then
+  echo "FAIL: sha256 file should use basename only" >&2
+  cat "$sha" >&2
+  exit 1
+fi
 
 echo "[OK] build release regression passed"

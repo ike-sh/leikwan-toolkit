@@ -4,8 +4,11 @@ set -Eeuo pipefail
 ROOT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
+# shellcheck source=/dev/null
+source "$ROOT_DIR/tests/test-lib.sh"
+
 mkdir -p "$ROOT_DIR/.tmp"
-TMP_DIR="$(TMPDIR="$ROOT_DIR/.tmp" mktemp -d)"
+TMP_DIR="$(test_mktemp_dir "$ROOT_DIR")"
 trap 'rm -rf "$TMP_DIR"' EXIT
 
 export LEIKWAN_STATE_DIR="${TMP_DIR}/state"
@@ -46,7 +49,7 @@ DDNS_RELAY_RESTART_NEEDED=true
 DDNS_ENTRY_CHANGED=public3
 TEST_AUTO_RESTART=true
 out_true="$(ddns_maybe_restart_relay 1 2>&1)"
-grep -q "DDNS_AUTO_RESTART_RELAY=true，正在自动重启 relay" <<<"$out_true"
+grep -q "DDNS_AUTO_RESTART_RELAY=true，正在自动重�?relay" <<<"$out_true"
 grep -q "\[MOCK\] relay restart" <<<"$out_true"
 if grep -q "是否现在重启 relay" <<<"$out_true"; then
   echo "FAIL: non-interactive auto restart prompted" >&2
@@ -54,7 +57,7 @@ if grep -q "是否现在重启 relay" <<<"$out_true"; then
   exit 1
 fi
 [[ "$(wc -l <"$restart_marker")" -eq 1 ]]
-grep -q "已自动重启 relay" <<<"$out_true"
+grep -q "已自动重�?relay" <<<"$out_true"
 
 restart_calls=0
 : >"$restart_marker"

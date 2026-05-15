@@ -4,7 +4,10 @@ set -Eeuo pipefail
 ROOT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
-TMP_DIR="$(mktemp -d)"
+# shellcheck source=/dev/null
+source "$ROOT_DIR/tests/test-lib.sh"
+
+TMP_DIR="$(test_mktemp_dir "$ROOT_DIR")"
 trap 'rm -rf "$TMP_DIR"' EXIT
 
 export LEIKWAN_STATE_DIR="${TMP_DIR}/state"
@@ -51,7 +54,7 @@ if (( busy_rc == 0 )); then
   cat "$holder_log" >&2
   exit 1
 fi
-grep -q "已有 Leikwan 任务运行中" <<<"$busy_out" || {
+grep -q "已有 Leikwan 任务运行�? <<<"$busy_out" || {
   echo "FAIL: busy lock did not produce friendly warning" >&2
   echo "$busy_out" >&2
   cat "$holder_log" >&2

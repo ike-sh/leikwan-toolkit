@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-TOOL_VERSION="1.4.6"
+TOOL_VERSION="1.4.7"
 RELEASE_CHANNEL="LTS"
 PROJECT_NAME="leikwan-toolkit"
 PROJECT_TITLE="利群快速组网工具"
@@ -772,6 +772,28 @@ make_state_tmp() {
   local dir="$1" prefix="${2:-tmp}"
   mkdir -p "$dir"
   mktemp "${dir}/.tmp.${prefix}.XXXXXX"
+}
+
+make_temp_file() {
+  local prefix="${1:-leikwan}" dir tmp
+  for dir in "${TMPDIR:-}" /tmp "${LEIKWAN_TMP_DIR:-}" "${PWD}/.tmp" "${STATE_DIR}/tmp"; do
+    [[ -n "$dir" ]] || continue
+    mkdir -p "$dir" 2>/dev/null || continue
+    [[ -w "$dir" ]] || continue
+    tmp="$(mktemp "${dir}/${prefix}.XXXXXX" 2>/dev/null)" && { printf '%s' "$tmp"; return 0; }
+  done
+  mktemp
+}
+
+make_temp_dir() {
+  local prefix="${1:-leikwan}" dir tmp
+  for dir in "${TMPDIR:-}" /tmp "${LEIKWAN_TMP_DIR:-}" "${PWD}/.tmp" "${STATE_DIR}/tmp"; do
+    [[ -n "$dir" ]] || continue
+    mkdir -p "$dir" 2>/dev/null || continue
+    [[ -w "$dir" ]] || continue
+    tmp="$(mktemp -d "${dir}/${prefix}.XXXXXX" 2>/dev/null)" && { printf '%s' "$tmp"; return 0; }
+  done
+  mktemp -d
 }
 
 confirm_summary() {
@@ -1767,7 +1789,7 @@ easytier_api_asset_url() {
     aarch64) re='linux.*(aarch64|arm64).*\.(zip|tar\.gz|tgz)$' ;;
     *) return 1 ;;
   esac
-  tmp="$(mktemp)"
+  tmp="$(make_temp_file leikwan-easytier-api)"
   dl_info "正在获取 EasyTier release 信息：${api}"
   if ! download_github_with_mirrors "$api" "$tmp" api; then
     dl_warn "无法获取 GitHub release metadata，将使用内置候选 URL。"
@@ -1900,9 +1922,11 @@ github_type_timeouts() {
 }
 
 downloaded_file_looks_like_html() {
-  local file="$1"
+  local file="$1" prefix lower
   [[ -s "$file" ]] || return 1
-  LC_ALL=C head -c 512 "$file" 2>/dev/null | grep -Eiq '<!doctype[[:space:]]+html|<html|<title>|</html>'
+  prefix="$(LC_ALL=C dd if="$file" bs=512 count=1 2>/dev/null | tr -d '\000' || true)"
+  lower="${prefix,,}"
+  [[ "$lower" == *"<!doctype html"* || "$lower" == *"<html"* || "$lower" == *"<title>"* || "$lower" == *"</html>"* ]]
 }
 
 github_download_output_valid() {
@@ -1944,7 +1968,7 @@ github_probe_source() {
     [[ "$kind" == "mirror" ]] && dl_info "镜像预检通过：${url}"
     return 0
   fi
-  probe_tmp="$(mktemp)"
+  probe_tmp="$(make_temp_file leikwan-github-probe)"
   if curl -fsSL --range 0-1023 --connect-timeout 5 --max-time 10 -o "$probe_tmp" "$url" >/dev/null 2>&1; then
     rm -f "$probe_tmp"
     [[ "$kind" == "mirror" ]] && dl_info "镜像预检通过：${url}"
@@ -1980,13 +2004,14 @@ github_fetch_to_file() {
 }
 
 download_github_with_mirrors() {
-  local raw_url="$1" dest_file="$2" type="${3:-small}" mode candidate kind tmp
+  local raw_url="$1" dest_file="$2" type="${3:-small}" mode candidate kind tmp source_key
   mode="$(github_download_mode)"
-  tmp="${dest_file}.tmp.$$"
-  rm -f "$tmp"
   dl_info "GitHub 下载策略：${mode}"
   while IFS= read -r candidate; do
     [[ -n "$candidate" ]] || continue
+    source_key="$(printf '%s' "$candidate" | cksum | awk '{print $1}')"
+    tmp="${dest_file}.part.${source_key}.$$"
+    rm -f "$tmp"
     kind="$(github_candidate_kind "$candidate" "$raw_url")"
     if [[ "$kind" == "mirror" ]]; then
       dl_info "正在尝试镜像：${candidate}"
@@ -1995,9 +2020,9 @@ download_github_with_mirrors() {
     fi
     if ! github_probe_source "$candidate" "$kind" "$type"; then
       dl_warn "当前下载源失败，正在切换下一个源。"
+      rm -f "$tmp"
       continue
     fi
-    rm -f "$tmp"
     if github_fetch_to_file "$candidate" "$tmp" "$type" "$kind" "$mode" &&
        github_download_output_valid "$tmp" "$type" "$candidate"; then
       mv -f "$tmp" "$dest_file"
@@ -2011,9 +2036,9 @@ download_github_with_mirrors() {
       return 0
     fi
     rm -f "$tmp"
+    dl_warn "当前源下载失败，已丢弃该源临时文件，切换下一个源。"
     dl_warn "当前下载源失败，正在切换下一个源。"
   done < <(github_url_candidates "$raw_url")
-  rm -f "$tmp"
   dl_error "所有 GitHub 下载源均失败。"
   return 1
 }
@@ -2059,42 +2084,171 @@ version_gt() {
   (( l3 > r3 ))
 }
 
-update_latest_release() {
-  local api tmp tag version effective candidate mode kind
-  api="https://api.github.com/repos/${UPDATE_REPO}/releases/latest"
-  tmp="$(mktemp)"
-  if download_github_with_mirrors "$api" "$tmp" api; then
-    if command -v jq >/dev/null 2>&1; then
-      tag="$(jq -r '.tag_name // empty' "$tmp" 2>/dev/null || true)"
-    else
-      tag="$(sed -n 's/^[[:space:]]*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$tmp" | head -n 1)"
-    fi
+release_version_from_tag() {
+  local tag="$1"
+  tag="${tag#v}"
+  tag="${tag#V}"
+  [[ "$tag" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || return 1
+  printf '%s' "$tag"
+}
+
+latest_parse_json_tag() {
+  local file="$1" tag version
+  [[ -s "$file" ]] || return 1
+  downloaded_file_looks_like_html "$file" && return 1
+  if command -v jq >/dev/null 2>&1; then
+    tag="$(jq -r '.tag_name // empty' "$file" 2>/dev/null || true)"
+  else
+    tag="$(grep -Eo '"tag_name"[[:space:]]*:[[:space:]]*"v?[0-9]+\.[0-9]+\.[0-9]+"' "$file" 2>/dev/null | head -n 1 | sed 's/.*:[[:space:]]*"//;s/"$//')"
   fi
-  rm -f "$tmp"
-  if [[ -z "${tag:-}" ]]; then
-    mode="$(github_download_mode)"
-    dl_info "GitHub 下载策略：${mode}"
-    while IFS= read -r candidate; do
-      [[ -n "$candidate" ]] || continue
-      kind="$(github_candidate_kind "$candidate" "https://github.com/${UPDATE_REPO}/releases/latest")"
-      if [[ "$kind" == "mirror" ]]; then
-        dl_info "正在尝试镜像：${candidate}"
-      else
-        dl_info "正在尝试 GitHub 官方：${candidate}"
+  version="$(release_version_from_tag "$tag" 2>/dev/null || true)"
+  [[ -n "$version" ]] || return 1
+  printf '%s' "$version"
+}
+
+latest_parse_tags_json() {
+  local file="$1" tag version best=""
+  [[ -s "$file" ]] || return 1
+  downloaded_file_looks_like_html "$file" && return 1
+  if command -v jq >/dev/null 2>&1; then
+    while IFS= read -r tag; do
+      version="$(release_version_from_tag "$tag" 2>/dev/null || true)"
+      [[ -n "$version" ]] || continue
+      if [[ -z "$best" ]] || version_gt "$version" "$best"; then
+        best="$version"
       fi
-      effective="$(curl -fsSLI --retry 0 --connect-timeout 8 --max-time 30 -o /dev/null -w '%{url_effective}' "$candidate" 2>/dev/null || true)"
-      [[ -n "$effective" ]] && break
-      dl_warn "当前下载源失败，正在切换下一个源。"
-    done < <(github_url_candidates "https://github.com/${UPDATE_REPO}/releases/latest")
-    tag="${effective##*/}"
+    done < <(jq -r '.[].name // empty' "$file" 2>/dev/null || true)
+  else
+    while IFS= read -r tag; do
+      version="$(release_version_from_tag "$tag" 2>/dev/null || true)"
+      [[ -n "$version" ]] || continue
+      if [[ -z "$best" ]] || version_gt "$version" "$best"; then
+        best="$version"
+      fi
+    done < <(grep -Eo '"name"[[:space:]]*:[[:space:]]*"v?[0-9]+\.[0-9]+\.[0-9]+"' "$file" 2>/dev/null | sed 's/.*:[[:space:]]*"//;s/"$//')
   fi
-  version="$(normalize_version "${tag:-}" 2>/dev/null || true)"
-  [[ -n "$version" ]] || { fail "无法解析 latest release 版本：${tag:-unknown}"; return 1; }
-  printf '%s\t%s\n' "${tag:-v${version}}" "$version"
+  [[ -n "$best" ]] || return 1
+  printf '%s' "$best"
+}
+
+latest_parse_release_html() {
+  local file="$1" tag version best=""
+  [[ -s "$file" ]] || return 1
+  while IFS= read -r tag; do
+    version="$(release_version_from_tag "$tag" 2>/dev/null || true)"
+    [[ -n "$version" ]] || continue
+    if [[ -z "$best" ]] || version_gt "$version" "$best"; then
+      best="$version"
+    fi
+  done < <(grep -Eo '/releases/tag/v?[0-9]+\.[0-9]+\.[0-9]+' "$file" 2>/dev/null | sed 's#^.*/tag/##' | sort -u)
+  [[ -n "$best" ]] || return 1
+  printf '%s' "$best"
+}
+
+latest_release_from_api_latest() {
+  local api tmp version
+  api="https://api.github.com/repos/${UPDATE_REPO}/releases/latest"
+  tmp="$(make_temp_file leikwan-latest-api)"
+  dl_info "正在尝试 GitHub API latest：${api}"
+  if download_github_with_mirrors "$api" "$tmp" api; then
+    version="$(latest_parse_json_tag "$tmp" 2>/dev/null || true)"
+    rm -f "$tmp"
+    [[ -n "$version" ]] && { printf '%s' "$version"; return 0; }
+  else
+    rm -f "$tmp"
+  fi
+  dl_warn "当前源无法解析 latest，切换下一路径。"
+  return 1
+}
+
+latest_release_from_redirect() {
+  local raw_url candidate kind effective version tag mode
+  command -v curl >/dev/null 2>&1 || return 1
+  raw_url="https://github.com/${UPDATE_REPO}/releases/latest"
+  mode="$(github_download_mode)"
+  dl_info "GitHub 下载策略：${mode}"
+  while IFS= read -r candidate; do
+    [[ -n "$candidate" ]] || continue
+    kind="$(github_candidate_kind "$candidate" "$raw_url")"
+    if [[ "$kind" == "mirror" ]]; then
+      dl_info "正在尝试 latest redirect 镜像：${candidate}"
+    else
+      dl_info "正在尝试 latest redirect 官方：${candidate}"
+    fi
+    effective="$(curl -fsSLI --retry 0 --connect-timeout 8 --max-time 30 -o /dev/null -w '%{url_effective}' "$candidate" 2>/dev/null || true)"
+    tag="$(printf '%s' "$effective" | sed -n 's#.*\/releases\/tag\/\(v\{0,1\}[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\).*#\1#p' | head -n 1)"
+    version="$(release_version_from_tag "$tag" 2>/dev/null || true)"
+    [[ -n "$version" ]] && { printf '%s' "$version"; return 0; }
+    dl_warn "当前源无法解析 latest，切换下一路径。"
+  done < <(github_url_candidates "$raw_url")
+  return 1
+}
+
+latest_release_from_tags_api() {
+  local api tmp version
+  api="https://api.github.com/repos/${UPDATE_REPO}/tags"
+  tmp="$(make_temp_file leikwan-tags-api)"
+  dl_info "正在尝试 GitHub tags API：${api}"
+  if download_github_with_mirrors "$api" "$tmp" api; then
+    version="$(latest_parse_tags_json "$tmp" 2>/dev/null || true)"
+    rm -f "$tmp"
+    [[ -n "$version" ]] && { printf '%s' "$version"; return 0; }
+  else
+    rm -f "$tmp"
+  fi
+  dl_warn "当前源无法解析 latest，切换下一路径。"
+  return 1
+}
+
+latest_release_from_html() {
+  local url tmp version
+  url="https://github.com/${UPDATE_REPO}/releases"
+  tmp="$(make_temp_file leikwan-releases-html)"
+  dl_info "正在尝试 GitHub releases HTML：${url}"
+  if download_github_with_mirrors "$url" "$tmp" raw; then
+    version="$(latest_parse_release_html "$tmp" 2>/dev/null || true)"
+    rm -f "$tmp"
+    [[ -n "$version" ]] && { printf '%s' "$version"; return 0; }
+  else
+    rm -f "$tmp"
+  fi
+  dl_warn "当前源无法解析 latest，切换下一路径。"
+  return 1
+}
+
+get_latest_release_version() {
+  local version
+  dl_info "正在获取最新版本，策略：$(github_download_mode)"
+  version="$(latest_release_from_api_latest || true)"
+  [[ -n "$version" ]] && { printf '%s' "$version"; return 0; }
+  version="$(latest_release_from_redirect || true)"
+  [[ -n "$version" ]] && { printf '%s' "$version"; return 0; }
+  version="$(latest_release_from_tags_api || true)"
+  [[ -n "$version" ]] && { printf '%s' "$version"; return 0; }
+  version="$(latest_release_from_html || true)"
+  [[ -n "$version" ]] && { printf '%s' "$version"; return 0; }
+  dl_warn "无法获取最新版本：GitHub API / latest redirect / tags 均失败。"
+  dl_info "可直接尝试“更新到最新版本”，或检查网络 / 镜像配置。"
+  return 1
+}
+
+update_latest_release() {
+  local version
+  version="$(get_latest_release_version)" || return 1
+  [[ -n "$version" ]] || return 1
+  printf 'v%s\t%s\n' "$version" "$version"
 }
 
 update_release_asset_url() {
   local tag="$1" version="$2" suffix="$3"
+  if ! release_version_from_tag "$version" >/dev/null 2>&1; then
+    fail "release 版本为空或无效，拒绝构造下载 URL。"
+    return 1
+  fi
+  if ! release_version_from_tag "$tag" >/dev/null 2>&1; then
+    fail "release tag 为空或无效，拒绝构造下载 URL。"
+    return 1
+  fi
   printf 'https://github.com/%s/releases/download/%s/leikwan-toolkit-%s.tar.gz%s\n' "$UPDATE_REPO" "$tag" "$version" "$suffix"
 }
 
@@ -2285,19 +2439,23 @@ update_maybe_reload_after_change() {
 }
 
 update_check() {
-  local latest tag latest_version installed_version installed_norm running_norm
-  latest="$(update_latest_release)" || return 1
-  IFS=$'\t' read -r tag latest_version <<<"$latest"
+  local latest_version installed_version installed_norm running_norm
   installed_version="$(update_installed_version)"
   installed_norm="$(normalize_version "$installed_version" 2>/dev/null || true)"
   running_norm="$(normalize_version "$TOOL_VERSION" 2>/dev/null || true)"
-  if [[ -z "$installed_norm" ]]; then
-    warn "当前安装版本无法解析：${installed_version}"
-    info "最新版本：${latest_version} (${tag})"
-    return 0
-  fi
   info "当前安装版本：${installed_version}"
   info "当前运行进程：${TOOL_VERSION}"
+  latest_version="$(get_latest_release_version)" || return 1
+  if [[ -z "$latest_version" ]]; then
+    warn "无法获取最新版本：GitHub API / latest redirect / tags 均失败。"
+    info "可直接尝试“更新到最新版本”，或检查网络 / 镜像配置。"
+    return 1
+  fi
+  if [[ -z "$installed_norm" ]]; then
+    warn "当前安装版本无法解析：${installed_version}"
+    info "最新版本：${latest_version}"
+    return 0
+  fi
   info "最新版本：${latest_version}"
   if [[ -n "$running_norm" ]] && update_versions_differ "$installed_version" "$TOOL_VERSION"; then
     warn "当前运行进程版本与已安装脚本版本不一致。"
@@ -2351,7 +2509,7 @@ update_status() {
 
 update_prepare_script_from_archive() {
   local archive="$1" dest="$2" extract script
-  extract="$(mktemp -d)"
+  extract="$(make_temp_dir leikwan-update-extract)"
   tar -xzf "$archive" -C "$extract"
   script="$(find "$extract" -type f -name 'leikwan-toolkit.sh' | head -n 1)"
   if [[ -z "$script" ]]; then
@@ -2402,11 +2560,25 @@ update_run() {
     release_global_lock=1
   fi
   old_version="$(update_installed_version)"
-  tmp="$(mktemp -d /tmp/leikwan-update.XXXXXX)"
+  tmp="$(make_temp_dir leikwan-update)"
   set +e
   (
-    latest="$(update_latest_release)" || exit 1
-    IFS=$'\t' read -r tag latest_version <<<"$latest"
+    if [[ -n "${LEIKWAN_TARGET_VERSION:-}" ]]; then
+      latest_version="$(release_version_from_tag "$LEIKWAN_TARGET_VERSION" 2>/dev/null || true)"
+      [[ -n "$latest_version" ]] || { fail "LEIKWAN_TARGET_VERSION 无效：${LEIKWAN_TARGET_VERSION}"; exit 1; }
+      tag="v${latest_version}"
+    else
+      latest="$(update_latest_release)" || { dl_error "无法确定最新版本，已取消更新。"; dl_info "可设置 LEIKWAN_TARGET_VERSION=1.4.7 后重试。"; exit 1; }
+      IFS=$'\t' read -r tag latest_version <<<"$latest"
+    fi
+    if [[ -z "${latest_version:-}" ]] || ! release_version_from_tag "$latest_version" >/dev/null 2>&1; then
+      dl_error "无法确定最新版本，已取消更新。"
+      dl_info "可设置 LEIKWAN_TARGET_VERSION=1.4.7 后重试。"
+      exit 1
+    fi
+    if [[ -z "${tag:-}" ]] || ! release_version_from_tag "$tag" >/dev/null 2>&1; then
+      tag="v${latest_version}"
+    fi
     if normalize_version "$old_version" >/dev/null 2>&1; then
       if ! version_gt "$latest_version" "$old_version"; then
         ok "当前已是最新版本：${old_version}"
@@ -2423,8 +2595,8 @@ update_run() {
     if is_interactive && [[ "$force" != "1" ]]; then
       prompt_yes_no "是否继续更新？" "N" || exit 0
     fi
-    package_url="$(update_release_asset_url "$tag" "$latest_version" "")"
-    sha_url="$(update_release_asset_url "$tag" "$latest_version" ".sha256")"
+    package_url="$(update_release_asset_url "$tag" "$latest_version" "")" || exit 1
+    sha_url="$(update_release_asset_url "$tag" "$latest_version" ".sha256")" || exit 1
     archive="${tmp}/leikwan-toolkit-${latest_version}.tar.gz"
     sha_file="${archive}.sha256"
     new_script="${tmp}/leikwan-toolkit.sh"
@@ -2590,6 +2762,11 @@ easytier_cached_archive_valid() {
     rm -f "$cache_file"
     return 1
   fi
+  if downloaded_file_looks_like_html "$cache_file"; then
+    dl_warn "已缓存 EasyTier 安装包疑似 HTML 错误页，删除后重新下载：${cache_file}"
+    rm -f "$cache_file"
+    return 1
+  fi
   if ! archive_integrity_ok "$cache_file" "$source"; then
     dl_warn "已缓存 EasyTier 安装包校验失败，删除后重新下载：${cache_file}"
     rm -f "$cache_file"
@@ -2614,6 +2791,10 @@ easytier_try_cached_archive() {
 easytier_store_archive_cache() {
   local archive="$1" raw_url="$2" cache_file
   [[ -f "$archive" ]] || return 0
+  if (( $(wc -c <"$archive") < 10485760 )); then
+    return 0
+  fi
+  downloaded_file_looks_like_html "$archive" && return 0
   cache_file="$(easytier_cache_path_for_url "$raw_url")"
   mkdir -p "$DOWNLOAD_CACHE_DIR" 2>/dev/null || return 0
   if cp -f "$archive" "$cache_file" 2>/dev/null; then

@@ -1,13 +1,17 @@
 # Release Notes
 
-## 1.4.6 LTS
+## 1.4.7 LTS
 
 - GitHub 下载默认改为 `mirror-first`，官方 GitHub 保留为最后兜底。
 - 扩大默认 GitHub 镜像池，并支持 `LEIKWAN_GITHUB_DOWNLOAD_MODE=origin-first` 改回官方优先。
+- 修复 latest 检测为空的问题，依次 fallback 到 API、redirect、tags API 和 HTML 解析。
+- latest 为空时自更新会明确失败，不再构造空版本下载 URL。
 - EasyTier release asset 先构造确定性 URL，按镜像池优先下载，API 只作为辅助兜底。
 - 大文件下载缩短单源超时，启用低速失败切源，不再在慢源上多次 retry。
+- 每个下载源使用独立临时文件，避免跨镜像 partial / resume。
 - EasyTier 安装包下载成功后缓存到 `/var/cache/leikwan-toolkit/downloads`，同版本优先复用。
 - 自更新 release 包和 `.sha256` 继续校验 sha256，并统一走 mirror-aware 下载。
+- Release `.sha256` 文件改为 basename 格式，避免写入本机绝对路径。
 
 ## 1.4.0 LTS
 

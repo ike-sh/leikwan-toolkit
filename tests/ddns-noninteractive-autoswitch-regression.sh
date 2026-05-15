@@ -4,8 +4,11 @@ set -Eeuo pipefail
 ROOT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
+# shellcheck source=/dev/null
+source "$ROOT_DIR/tests/test-lib.sh"
+
 mkdir -p "$ROOT_DIR/.tmp"
-TMP_DIR="$(TMPDIR="$ROOT_DIR/.tmp" mktemp -d)"
+TMP_DIR="$(test_mktemp_dir "$ROOT_DIR")"
 trap 'rm -rf "$TMP_DIR"' EXIT
 
 export LEIKWAN_STATE_DIR="${TMP_DIR}/state"
@@ -110,7 +113,7 @@ if grep -Eq "是否现在重启 relay|\\[y/N\\]|\\[Y/n\\]" <<<"$out_true"; then
   echo "$out_true" >&2
   exit 1
 fi
-grep -q "非交互模式，DDNS_AUTO_RESTART_RELAY=true，正在自动重启 relay" <<<"$out_true"
+grep -q "非交互模式，DDNS_AUTO_RESTART_RELAY=true，正在自动重�?relay" <<<"$out_true"
 grep -q "\[MOCK\] relay restart" <<<"$out_true"
 grep -q "\[MOCK\] nft apply" <<<"$out_true"
 grep -q "\[MOCK\] pbr apply" <<<"$out_true"
@@ -125,7 +128,7 @@ grep -q "192.0.2.20" "$PBR_RESOLVED_DOMAIN_TSV" || {
 }
 grep -q "LAST_DDNS_RELAY_RESTARTED=true" "$DDNS_STATUS_FILE"
 grep -q "LAST_DDNS_RELAY_RESTART_NEEDED=false" "$DDNS_STATUS_FILE"
-grep -q "LAST_DDNS_ENTRY_RECENT_ACTION=.*relay 已重启" "$DDNS_STATUS_FILE"
+grep -q "LAST_DDNS_ENTRY_RECENT_ACTION=.*relay 已重�? "$DDNS_STATUS_FILE"
 [[ "$(wc -l <"$restart_marker")" -eq 1 ]]
 
 sed -i 's/^DDNS_AUTO_RESTART_RELAY=.*/DDNS_AUTO_RESTART_RELAY=false/' "$DDNS_CONFIG"
@@ -148,6 +151,6 @@ fi
 [[ "$(wc -l <"$restart_marker")" -eq 0 ]]
 grep -q "198.51.100.21" "$RESOLVED_ENTRIES_TSV"
 grep -q "LAST_DDNS_RELAY_RESTART_NEEDED=true" "$DDNS_STATUS_FILE"
-grep -q "LAST_DDNS_ENTRY_RECENT_ACTION=已写入缓存 / relay restart needed" "$DDNS_STATUS_FILE"
+grep -q "LAST_DDNS_ENTRY_RECENT_ACTION=已写入缓�?/ relay restart needed" "$DDNS_STATUS_FILE"
 
 echo "[OK] DDNS noninteractive autoswitch regression passed"

@@ -4,8 +4,11 @@ set -Eeuo pipefail
 ROOT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
+# shellcheck source=/dev/null
+source "$ROOT_DIR/tests/test-lib.sh"
+
 mkdir -p "$ROOT_DIR/.tmp"
-TMP_DIR="$(TMPDIR="$ROOT_DIR/.tmp" mktemp -d)"
+TMP_DIR="$(test_mktemp_dir "$ROOT_DIR")"
 trap 'rm -rf "$TMP_DIR"' EXIT
 
 export LEIKWAN_STATE_DIR="${TMP_DIR}/state"
@@ -33,7 +36,7 @@ EOF
 
 out="$(report_ddns_global_state 2>&1)"
 grep -q "辅助公网 IP 检测最近成功：203.0.113.9 (https://4.ipw.cn)" <<<"$out"
-if grep -q "最近没有可用结果" <<<"$out"; then
+if grep -q "最近没有可用结�? <<<"$out"; then
   echo "FAIL: doctor reported missing public IP despite successful DDNS status" >&2
   echo "$out" >&2
   exit 1
@@ -46,6 +49,6 @@ LAST_DDNS_PUBLIC_IP=
 LAST_DDNS_PUBLIC_IP_SOURCE=
 EOF
 fail_out="$(report_ddns_global_state 2>&1)"
-grep -q "辅助公网 IP 检测失败" <<<"$fail_out"
+grep -q "辅助公网 IP 检测失�? <<<"$fail_out"
 
 echo "[OK] doctor DDNS status regression passed"

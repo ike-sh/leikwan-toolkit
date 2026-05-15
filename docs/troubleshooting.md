@@ -1,4 +1,4 @@
-﻿# 故障排查
+# 故障排查
 
 Leikwan Toolkit 1.4.1 主线是 EasyTier 传输 + nftables 四层 TCP/UDP 转发。脚本不部署后端业务，只负责：
 
@@ -86,7 +86,7 @@ relay 重启后 easytier-cli 的 peer 列表可能短时间未刷新。脚本会
 
 ## EasyTier 下载
 
-1.4.6 起，GitHub 下载默认使用 `LEIKWAN_GITHUB_DOWNLOAD_MODE=mirror-first`：先尝试镜像池，再把官方 GitHub 作为最后兜底。需要改回官方优先时设置：
+1.4.7 起，GitHub 下载默认使用 `LEIKWAN_GITHUB_DOWNLOAD_MODE=mirror-first`：先尝试镜像池，再把官方 GitHub 作为最后兜底。需要改回官方优先时设置：
 
 ```bash
 export LEIKWAN_GITHUB_DOWNLOAD_MODE=origin-first
@@ -100,6 +100,8 @@ export LEIKWAN_GITHUB_MIRRORS="https://gh-proxy.com/,https://gh.llkk.cc/,https:/
 
 EasyTier release asset 不再依赖 GitHub API 作为前置步骤。脚本会先构造 `zip`、`tar.gz`、`tgz` 候选 URL，并按镜像池优先下载；API 只作为辅助兜底。单个下载源会使用短连接超时、总超时和低速失败切换，避免官方 GitHub 大文件直连卡住很久。缺少 `unzip` 时会跳过 zip 并继续尝试 tar.gz/tgz，或引导用户提供本地包 / 本地二进制。
 
+每个下载源使用独立临时文件，不跨镜像复用 partial 内容。当前源失败时会丢弃该源临时文件，再切换下一个镜像，避免不同镜像内容拼接导致坏包。
+
 EasyTier 成功下载的安装包会缓存到：
 
 ```text
@@ -107,6 +109,21 @@ EasyTier 成功下载的安装包会缓存到：
 ```
 
 下次安装同版本会优先复用缓存；缓存包校验或解压失败时会删除缓存并重新下载。
+
+## 最新版本检查
+
+如果 `lq update check` 无法取得 latest，会明确输出：
+
+```text
+[WARN] 无法获取最新版本：GitHub API / latest redirect / tags 均失败。
+```
+
+这时不会输出空的“最新版本”，也不会构造空版本下载 URL。可检查网络 / 镜像配置，或在确认版本号后使用：
+
+```bash
+export LEIKWAN_TARGET_VERSION=1.4.7
+lq update run
+```
 
 ## 端口混淆
 

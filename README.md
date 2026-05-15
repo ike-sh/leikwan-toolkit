@@ -1,6 +1,6 @@
 # Leikwan Toolkit
 
-Leikwan Toolkit `1.4.6 LTS` is the Shell LTS line for local TCP/UDP forwarding, EasyTier relay / entry setup, nftables, IPv4 PBR, snapshots, status, doctor, and DDNS domain-resolution refresh.
+Leikwan Toolkit `1.4.7 LTS` is the Shell LTS line for local TCP/UDP forwarding, EasyTier relay / entry setup, nftables, IPv4 PBR, snapshots, status, doctor, and DDNS domain-resolution refresh.
 
 当前仓库只维护 Shell LTS：
 
@@ -13,14 +13,7 @@ Leikwan Toolkit `1.4.6 LTS` is the Shell LTS line for local TCP/UDP forwarding, 
 
 ## 快速开始
 
-官方安装命令：
-
-```bash
-curl -fsSL -o /tmp/lq-bootstrap.sh https://raw.githubusercontent.com/ike-sh/leikwan-toolkit/main/scripts/bootstrap.sh
-bash /tmp/lq-bootstrap.sh
-```
-
-国内机器推荐使用镜像入口，并让 bootstrap 后续 GitHub 下载默认走 mirror-first：
+国内机器优先使用这一组命令，避免 GitHub 大文件直连卡住。bootstrap 后续 GitHub 下载默认继续走 `mirror-first`：
 
 ```bash
 export LEIKWAN_GITHUB_DOWNLOAD_MODE=mirror-first
@@ -30,6 +23,13 @@ bash /tmp/lq-bootstrap.sh
 ```
 
 国内机器建议使用国内推荐命令。bootstrap 内部后续 GitHub 下载默认 `mirror-first`，镜像失败时会 fallback 官方 GitHub；如果某个镜像不可用，可调整 `LEIKWAN_GITHUB_MIRRORS` 顺序。需要改回官方 GitHub 优先时设置 `LEIKWAN_GITHUB_DOWNLOAD_MODE=origin-first`。
+
+官方安装命令：
+
+```bash
+curl -fsSL -o /tmp/lq-bootstrap.sh https://raw.githubusercontent.com/ike-sh/leikwan-toolkit/main/scripts/bootstrap.sh
+bash /tmp/lq-bootstrap.sh
+```
 
 ```bash
 lq init
@@ -45,7 +45,7 @@ lq forward apply-relay --auto-fix-route
 
 ```bash
 lq --version
-# leikwan-toolkit 1.4.6 LTS
+# leikwan-toolkit 1.4.7 LTS
 ```
 
 ## 域名解析变化自动刷新
@@ -98,10 +98,10 @@ PUBLIC_IP_CHECK_URLS=
 ```bash
 bash scripts/build-release.sh
 # 或指定版本
-VERSION=1.4.6 bash scripts/build-release.sh
+VERSION=1.4.7 bash scripts/build-release.sh
 ```
 
-产物写入 `dist/leikwan-toolkit-1.4.6.tar.gz` 和对应 `.sha256`，只包含 Shell LTS 需要的 README、主脚本、scripts、docs、tests 和可选 LICENSE。
+产物写入 `dist/leikwan-toolkit-1.4.7.tar.gz` 和对应 `.sha256`，只包含 Shell LTS 需要的 README、主脚本、scripts、docs、tests 和可选 LICENSE。`.sha256` 文件使用 `hash  leikwan-toolkit-1.4.7.tar.gz` 的 basename 格式。
 
 ## 文档
 

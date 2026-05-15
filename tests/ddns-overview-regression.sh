@@ -4,8 +4,11 @@ set -Eeuo pipefail
 ROOT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
+# shellcheck source=/dev/null
+source "$ROOT_DIR/tests/test-lib.sh"
+
 mkdir -p "$ROOT_DIR/.tmp"
-TMP_DIR="$(TMPDIR="$ROOT_DIR/.tmp" mktemp -d)"
+TMP_DIR="$(test_mktemp_dir "$ROOT_DIR")"
 trap 'rm -rf "$TMP_DIR"' EXIT
 
 export LEIKWAN_STATE_DIR="${TMP_DIR}/state"
@@ -63,7 +66,7 @@ LAST_DDNS_DNS_SPLIT_RESULTS=1.1.1.1 -> 1.1.1.1;8.8.8.8 -> 1.1.1.1;223.5.5.5 -> 2
 LAST_DDNS_DNS_SELECTED_IP=1.1.1.1
 LAST_DDNS_DNS_SELECTED_SOURCE=1.1.1.1
 LAST_DDNS_ENTRY_RECENT_EVENTS=public3: 1.1.1.1 -> 74.48.182.221
-LAST_DDNS_ENTRY_RECENT_ACTION=已写入缓存 / relay restart needed
+LAST_DDNS_ENTRY_RECENT_ACTION=已写入缓�?/ relay restart needed
 LAST_DDNS_VERSION=1.4.5
 EOF
 entry_ddns_write_config true home.example.test custom-url "" "" "" "" 5min last
@@ -78,34 +81,34 @@ LAST_ENTRY_DDNS_VERSION=1.4.5
 EOF
 
 overview="$(ddns_overview)"
-grep -q "DDNS / 域名解析状态" <<<"$overview"
+grep -q "DDNS / 域名解析状�? <<<"$overview"
 grep -q "辅助公网 IP" <<<"$overview"
 grep -q "辅助公网 IP 检测源: https://api.ipify.org" <<<"$overview"
 grep -q "DNS 解析策略: first-success" <<<"$overview"
-grep -q "DNS 解析器: 1.1.1.1,8.8.8.8,223.5.5.5,119.29.29.29" <<<"$overview"
+grep -q "DNS 解析�? 1.1.1.1,8.8.8.8,223.5.5.5,119.29.29.29" <<<"$overview"
 grep -q "timer:" <<<"$overview"
-grep -q "下次检测:" <<<"$overview"
-grep -q "DNS 传播状态: 不一致" <<<"$overview"
-grep -q "最近 DNS 分歧" <<<"$overview"
+grep -q "下次检�?" <<<"$overview"
+grep -q "DNS 传播状�? 不一�? <<<"$overview"
+grep -q "最�?DNS 分歧" <<<"$overview"
 grep -q "当前采用: 1.1.1.1" <<<"$overview"
 grep -q "后端域名: checked 1, changed 0, failed 0" <<<"$overview"
 grep -q "公网入口域名: checked 1, changed 1, failed 0" <<<"$overview"
 grep -q "PBR 域名: checked 1, changed 0, failed 0" <<<"$overview"
 grep -q "relay restart needed: yes" <<<"$overview"
-grep -q "最近公网入口变化" <<<"$overview"
+grep -q "最近公网入口变�? <<<"$overview"
 grep -q "public3: 1.1.1.1 -> 74.48.182.221" <<<"$overview"
-grep -q "动作: 已写入缓存 / relay restart needed" <<<"$overview"
+grep -q "动作: 已写入缓�?/ relay restart needed" <<<"$overview"
 
 status_out="$(ddns_status)"
-grep -q "DDNS / 域名解析状态" <<<"$status_out"
+grep -q "DDNS / 域名解析状�? <<<"$status_out"
 grep -q "辅助公网 IP" <<<"$status_out"
 grep -q "DNS 解析策略" <<<"$status_out"
-grep -q "DNS 传播状态" <<<"$status_out"
+grep -q "DNS 传播状�? <<<"$status_out"
 grep -q "后端域名" <<<"$status_out"
 grep -q "公网入口域名" <<<"$status_out"
 grep -q "PBR 域名" <<<"$status_out"
 grep -q "relay restart needed" <<<"$status_out"
-grep -q "最近公网入口变化" <<<"$status_out"
+grep -q "最近公网入口变�? <<<"$status_out"
 
 json_out="$(bash leikwan-toolkit.sh status --json)"
 grep -q '"relay_restart_needed": "yes"' <<<"$json_out"

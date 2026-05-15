@@ -5,8 +5,11 @@ set -Eeuo pipefail
 ROOT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
+# shellcheck source=/dev/null
+source "$ROOT_DIR/tests/test-lib.sh"
+
 mkdir -p "$ROOT_DIR/.tmp"
-TMP_DIR="$(TMPDIR="$ROOT_DIR/.tmp" mktemp -d)"
+TMP_DIR="$(test_mktemp_dir "$ROOT_DIR")"
 trap 'rm -rf "$TMP_DIR"' EXIT
 
 export LEIKWAN_STATE_DIR="${TMP_DIR}/state"
@@ -36,14 +39,14 @@ DDNS_RELAY_RESTART_NEEDED=false
 DDNS_RELAY_RESTARTED=false
 
 summary="$(ddns_print_summary ok)"
-grep -q "域名解析变化检测摘要" <<<"$summary"
-grep -q "后端转发：" <<<"$summary"
-grep -q -- "- 检查 4" <<<"$summary"
-grep -q "公网入口：" <<<"$summary"
+grep -q "域名解析变化检测摘�? <<<"$summary"
+grep -q "后端转发�? <<<"$summary"
+grep -q -- "- 检�?4" <<<"$summary"
+grep -q "公网入口�? <<<"$summary"
 grep -q -- "- 无需刷新" <<<"$summary"
-grep -q "域名 PBR：" <<<"$summary"
-grep -q -- "- 未配置" <<<"$summary"
-grep -q "系统动作：" <<<"$summary"
+grep -q "域名 PBR�? <<<"$summary"
+grep -q -- "- 未配�? <<<"$summary"
+grep -q "系统动作�? <<<"$summary"
 grep -q "DDNS 状态：OK" <<<"$summary"
 if grep -q "summary scope=" <<<"$summary"; then
   echo "FAIL: old machine-style DDNS summary leaked" >&2

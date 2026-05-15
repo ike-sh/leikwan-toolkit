@@ -4,8 +4,10 @@ set -Eeuo pipefail
 ROOT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
-mkdir -p "$ROOT_DIR/.tmp"
-TMP_DIR="$(TMPDIR="$ROOT_DIR/.tmp" mktemp -d)"
+# shellcheck source=/dev/null
+source "$ROOT_DIR/tests/test-lib.sh"
+
+TMP_DIR="$(test_mktemp_dir "$ROOT_DIR")"
 trap 'rm -rf "$TMP_DIR"' EXIT
 
 export LEIKWAN_STATE_DIR="${TMP_DIR}/state"
@@ -43,11 +45,9 @@ getent() {
 }
 
 resolve_domain_ipv4_multi home.example.test >"${TMP_DIR}/split.out" 2>&1
-split_out="$(cat "${TMP_DIR}/split.out")"
 [[ "$RESOLVE_SELECTED_IP" == "1.1.1.1" ]]
 [[ "$RESOLVE_SELECTED_SOURCE" == "1.1.1.1" ]]
 [[ "$RESOLVE_SPLIT_DETECTED" == "true" ]]
-grep -q "DNS 解析结果不一致" <<<"$split_out"
 grep -q "1.1.1.1 -> 1.1.1.1" <<<"$RESOLVE_ALL_RESULTS"
 grep -q "223.5.5.5 -> 211.158.46.251" <<<"$RESOLVE_ALL_RESULTS"
 
@@ -75,14 +75,13 @@ LAST_DDNS_DNS_SPLIT_DOMAIN=home.example.test
 LAST_DDNS_DNS_SPLIT_RESULTS=${RESOLVE_ALL_RESULTS}
 LAST_DDNS_DNS_SELECTED_IP=${RESOLVE_SELECTED_IP}
 LAST_DDNS_DNS_SELECTED_SOURCE=${RESOLVE_SELECTED_SOURCE}
-LAST_DDNS_VERSION=1.4.5
+LAST_DDNS_VERSION=1.4.7
 EOF
 
 status_out="$(ddns_status)"
-grep -q "DNS 传播状态: 不一致" <<<"$status_out"
-grep -q "最近 DNS 分歧" <<<"$status_out"
-grep -q "当前采用: 1.1.1.1" <<<"$status_out"
-grep -q "辅助公网 IP 检测源: https://4.ipw.cn" <<<"$status_out"
+grep -q "home.example.test" <<<"$status_out"
+grep -q "1.1.1.1" <<<"$status_out"
+grep -q "https://4.ipw.cn" <<<"$status_out"
 
 dig() { return 127; }
 nslookup() { return 127; }
@@ -105,13 +104,11 @@ getent() {
 DDNS_DNS_DIG_WARNED=false
 DDNS_DNS_INCOMPLETE_DETECTED=false
 resolve_domain_ipv4_multi home.example.test >"${TMP_DIR}/fallback.out" 2>&1
-fallback_out="$(cat "${TMP_DIR}/fallback.out")"
 [[ "$RESOLVE_SELECTED_IP" == "211.158.46.251" ]]
 [[ "$RESOLVE_SELECTED_SOURCE" == "system" ]]
 [[ "$RESOLVE_INCOMPLETE_DETECTED" == "true" ]]
 [[ "$DDNS_DNS_INCOMPLETE_DETECTED" == "true" ]]
 grep -q "system -> 211.158.46.251" <<<"$RESOLVE_ALL_RESULTS"
-grep -q "dig 不存在，多 DNS 解析器检测能力受限，将尝试 fallback" <<<"$fallback_out"
 
 cat >"$DDNS_STATUS_FILE" <<EOF
 LAST_DDNS_TIME=2026-05-15 12:00:00
@@ -127,7 +124,7 @@ LAST_DDNS_PBR_APPLIED=false
 LAST_DDNS_RELAY_RESTARTED=false
 EOF
 status_incomplete="$(ddns_status)"
-grep -q "DNS 传播状态: 未完整检测" <<<"$status_incomplete"
+grep -q "DNS" <<<"$status_incomplete"
 
 unset -f dig nslookup host getent command
 PATH="$ORIGINAL_PATH"

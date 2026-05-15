@@ -4,6 +4,11 @@ set -Eeuo pipefail
 ROOT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
+if [[ -z "${TMPDIR:-}" || ! -w "${TMPDIR:-}" ]]; then
+  mkdir -p "$ROOT_DIR/.tmp"
+  export TMPDIR="$ROOT_DIR/.tmp"
+fi
+
 VERSION="${VERSION:-${1:-}}"
 if [[ -z "$VERSION" ]]; then
   VERSION="$(awk -F= '$1=="TOOL_VERSION" {gsub(/"/, "", $2); print $2; exit}' leikwan-toolkit.sh)"
@@ -15,7 +20,7 @@ fi
 
 PACKAGE_NAME="leikwan-toolkit-${VERSION}"
 DIST_DIR="${ROOT_DIR}/dist"
-WORK_PARENT="${ROOT_DIR}/.tmp"
+WORK_PARENT="${TMPDIR:-${ROOT_DIR}/.tmp}"
 STAGE_DIR="${WORK_PARENT}/${PACKAGE_NAME}"
 PACKAGE_PATH="${DIST_DIR}/${PACKAGE_NAME}.tar.gz"
 SHA_PATH="${PACKAGE_PATH}.sha256"
@@ -42,9 +47,9 @@ rm -f "$PACKAGE_PATH" "$SHA_PATH"
 tar -czf "$PACKAGE_PATH" -C "$WORK_PARENT" "$PACKAGE_NAME"
 
 if command -v sha256sum >/dev/null 2>&1; then
-  sha256sum "$PACKAGE_PATH" >"$SHA_PATH"
+  (cd "$DIST_DIR" && sha256sum "${PACKAGE_NAME}.tar.gz" >"${PACKAGE_NAME}.tar.gz.sha256")
 elif command -v shasum >/dev/null 2>&1; then
-  shasum -a 256 "$PACKAGE_PATH" >"$SHA_PATH"
+  (cd "$DIST_DIR" && shasum -a 256 "${PACKAGE_NAME}.tar.gz" >"${PACKAGE_NAME}.tar.gz.sha256")
 else
   echo "[FAIL] sha256sum 或 shasum 不存在，无法生成校验文件。" >&2
   exit 1

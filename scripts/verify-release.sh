@@ -4,6 +4,11 @@ set -Eeuo pipefail
 ROOT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
+if [[ -z "${TMPDIR:-}" || ! -w "${TMPDIR:-}" ]]; then
+  mkdir -p "$ROOT_DIR/.tmp"
+  export TMPDIR="$ROOT_DIR/.tmp"
+fi
+
 section() {
   echo
   echo "==> $*"
@@ -66,6 +71,12 @@ bash tests/health-score-regression.sh
 section "update regression"
 bash tests/update-regression.sh
 
+section "latest version regression"
+bash tests/update-latest-version-regression.sh
+
+section "empty latest guard regression"
+bash tests/update-empty-latest-guard-regression.sh
+
 section "package regression"
 bash tests/package-regression.sh
 
@@ -77,6 +88,9 @@ bash tests/easytier-download-mirror-regression.sh
 
 section "bootstrap mirror-first regression"
 bash tests/bootstrap-mirror-first-regression.sh
+
+section "tmpdir fallback regression"
+bash tests/tmpdir-fallback-regression.sh
 
 section "uninstall regression"
 bash tests/uninstall-regression.sh

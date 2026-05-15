@@ -5,8 +5,11 @@ set -Eeuo pipefail
 ROOT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
+# shellcheck source=/dev/null
+source "$ROOT_DIR/tests/test-lib.sh"
+
 mkdir -p "$ROOT_DIR/.tmp"
-TMP_DIR="$(TMPDIR="$ROOT_DIR/.tmp" mktemp -d)"
+TMP_DIR="$(test_mktemp_dir "$ROOT_DIR")"
 trap 'rm -rf "$TMP_DIR"' EXIT
 
 export LEIKWAN_STATE_DIR="${TMP_DIR}/state"
@@ -39,9 +42,9 @@ EOF
 [[ -f "$ENTRY_DDNS_CONFIG" ]] || { echo "FAIL: entry ddns config not created" >&2; exit 1; }
 
 status_out="$(entry_ddns_status)"
-grep -q "兼容 DNS 更新状态" <<<"$status_out"
+grep -q "兼容 DNS 更新状�? <<<"$status_out"
 grep -q "home.example.test" <<<"$status_out"
-grep -q "一致性: OK" <<<"$status_out"
+grep -q "一致�? OK" <<<"$status_out"
 
 summary_out="$(entry_ddns_current_config_summary)"
 grep -q "兼容 DNS 更新当前配置" <<<"$summary_out"
@@ -74,8 +77,8 @@ fi
 
 no_config_state="${TMP_DIR}/empty-state"
 out="$(LEIKWAN_STATE_DIR="$no_config_state" LEIKWAN_RUN_DIR="${TMP_DIR}/run2" LEIKWAN_LOG_DISABLED=1 bash leikwan-toolkit.sh entry ddns status 2>&1)"
-grep -q "未配置兼容 DNS 更新入口" <<<"$out"
-if grep -q "错误：脚本在第" <<<"$out"; then
+grep -q "未配置兼�?DNS 更新入口" <<<"$out"
+if grep -q "错误：脚本在�? <<<"$out"; then
   echo "FAIL: entry ddns status triggered global trap" >&2
   echo "$out" >&2
   exit 1
@@ -94,7 +97,7 @@ resolve_domain_ipv4_multi() {
 }
 entry_ddns_run_update() { echo "UPDATE_CALLED"; return 0; }
 same_out="$(entry_ddns_run 2>&1)"
-grep -q "正在检测当前公网 IPv4" <<<"$same_out"
+grep -q "正在检测当前公�?IPv4" <<<"$same_out"
 grep -q "正在解析域名：home.example.test" <<<"$same_out"
 grep -q "DDNS 已一致，无需更新" <<<"$same_out"
 if grep -q "UPDATE_CALLED" <<<"$same_out"; then

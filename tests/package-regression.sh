@@ -4,6 +4,9 @@ set -Eeuo pipefail
 ROOT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
+# shellcheck source=/dev/null
+source "$ROOT_DIR/tests/test-lib.sh"
+
 bash scripts/package-release.sh
 
 version="$(awk -F= '$1=="TOOL_VERSION" {gsub(/"/, "", $2); print $2; exit}' leikwan-toolkit.sh)"
@@ -12,7 +15,7 @@ sha="${pkg}.sha256"
 [[ -f "$pkg" ]] || { echo "FAIL: missing package: ${pkg}" >&2; exit 1; }
 [[ -f "$sha" ]] || { echo "FAIL: missing sha256: ${sha}" >&2; exit 1; }
 
-list="$(mktemp)"
+list="$(test_mktemp_file "$ROOT_DIR" "package-list.XXXXXX")"
 trap 'rm -f "$list"' EXIT
 tar -tzf "$pkg" >"$list"
 

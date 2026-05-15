@@ -1,6 +1,6 @@
 ﻿# 验收清单
 
-本页用于 Leikwan Toolkit 1.4.0 LTS 正式版验收。
+本页用于 Leikwan Toolkit 1.4.7 LTS 正式版验收。
 
 ## 版本
 
@@ -12,8 +12,8 @@ bash leikwan-toolkit.sh --version
 期望：
 
 ```text
-TOOL_VERSION="1.4.0"
-leikwan-toolkit 1.4.0 LTS
+TOOL_VERSION="1.4.7"
+leikwan-toolkit 1.4.7 LTS
 ```
 
 ## 打包
@@ -30,8 +30,8 @@ bash scripts/package-release.sh
 期望生成：
 
 ```text
-dist/leikwan-toolkit-1.4.0.tar.gz
-dist/leikwan-toolkit-1.4.0.tar.gz.sha256
+dist/leikwan-toolkit-1.4.7.tar.gz
+dist/leikwan-toolkit-1.4.7.tar.gz.sha256
 ```
 
 release 包不得包含旧入口文件：

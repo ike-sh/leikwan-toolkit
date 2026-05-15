@@ -4,8 +4,11 @@ set -Eeuo pipefail
 ROOT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
+# shellcheck source=/dev/null
+source "$ROOT_DIR/tests/test-lib.sh"
+
 mkdir -p "$ROOT_DIR/.tmp"
-TMP_DIR="$(TMPDIR="$ROOT_DIR/.tmp" mktemp -d)"
+TMP_DIR="$(test_mktemp_dir "$ROOT_DIR")"
 trap 'rm -rf "$TMP_DIR"' EXIT
 
 export LEIKWAN_STATE_DIR="${TMP_DIR}/state"
@@ -52,7 +55,7 @@ before="$(state_file_manifest)"
 out="$(ddns_check_consistency)"
 after="$(state_file_manifest)"
 
-grep -q "DDNS / 域名解析一致性检查" <<<"$out"
+grep -q "DDNS / 域名解析一致性检�? <<<"$out"
 grep -q "public2 home.example.test resolved=198.51.100.10 cache=198.51.100.10 OK" <<<"$out"
 grep -q "host=home.example.test" <<<"$out"
 grep -q "match=OK" <<<"$out"
@@ -65,9 +68,9 @@ grep -q "结果: OK" <<<"$out"
 
 empty_out="$(LEIKWAN_STATE_DIR="${TMP_DIR}/empty" LEIKWAN_RUN_DIR="${TMP_DIR}/run2" LEIKWAN_LOG_DISABLED=1 bash leikwan-toolkit.sh ddns check-consistency 2>&1)"
 grep -q "公网入口缓存:" <<<"$empty_out"
-grep -q "未配置" <<<"$empty_out"
+grep -q "未配�? <<<"$empty_out"
 grep -q "兼容 DNS 更新配置:" <<<"$empty_out"
-if grep -q "错误：脚本在第" <<<"$empty_out"; then
+if grep -q "错误：脚本在�? <<<"$empty_out"; then
   echo "FAIL: ddns check-consistency triggered global trap" >&2
   echo "$empty_out" >&2
   exit 1

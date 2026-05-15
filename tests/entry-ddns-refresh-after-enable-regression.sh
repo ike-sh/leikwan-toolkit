@@ -4,8 +4,11 @@ set -Eeuo pipefail
 ROOT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
+# shellcheck source=/dev/null
+source "$ROOT_DIR/tests/test-lib.sh"
+
 mkdir -p "$ROOT_DIR/.tmp"
-TMP_DIR="$(TMPDIR="$ROOT_DIR/.tmp" mktemp -d)"
+TMP_DIR="$(test_mktemp_dir "$ROOT_DIR")"
 trap 'rm -rf "$TMP_DIR"' EXIT
 
 export LEIKWAN_STATE_DIR="${TMP_DIR}/state"
@@ -38,7 +41,7 @@ EOF
 
 out="$(printf '1\n\n' | set_entry_enabled 2>&1)"
 grep -q "已启用公网入口：public3" <<<"$out"
-grep -q "检测到公网入口使用域名，正在刷新解析缓存" <<<"$out"
+grep -q "检测到公网入口使用域名，正在刷新解析缓�? <<<"$out"
 grep -q "home.example.test" "$RESOLVED_ENTRIES_TSV"
 grep -q "74.48.182.221" "$RESOLVED_ENTRIES_TSV"
 grep -q "LAST_DDNS_ENTRY_RECENT_EVENTS=public3: 初次记录 74.48.182.221" "$DDNS_STATUS_FILE"

@@ -4,8 +4,11 @@ set -Eeuo pipefail
 ROOT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
+# shellcheck source=/dev/null
+source "$ROOT_DIR/tests/test-lib.sh"
+
 mkdir -p "$ROOT_DIR/.tmp"
-TMP_DIR="$(TMPDIR="$ROOT_DIR/.tmp" mktemp -d)"
+TMP_DIR="$(test_mktemp_dir "$ROOT_DIR")"
 trap 'rm -rf "$TMP_DIR"' EXIT
 
 export LEIKWAN_STATE_DIR="${TMP_DIR}/state"
@@ -51,7 +54,7 @@ fi
 awk -F'\t' '$1=="public3" {exit !($7=="false")}' "$ENTRIES_TSV"
 
 bulk_out="$(printf '1\n\n' | bulk_entry_enable_menu 2>&1 || true)"
-grep -q "是否启用所有公网入口" <<<"$bulk_out"
+grep -q "是否启用所有公网入�? <<<"$bulk_out"
 if grep -q "$old_enabled_prompt" <<<"$bulk_out"; then
   echo "FAIL: old enabled true-or-false prompt leaked for bulk entry toggle" >&2
   echo "$bulk_out" >&2

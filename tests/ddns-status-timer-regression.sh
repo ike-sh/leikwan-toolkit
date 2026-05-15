@@ -4,8 +4,11 @@ set -Eeuo pipefail
 ROOT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
+# shellcheck source=/dev/null
+source "$ROOT_DIR/tests/test-lib.sh"
+
 mkdir -p "$ROOT_DIR/.tmp"
-TMP_DIR="$(TMPDIR="$ROOT_DIR/.tmp" mktemp -d)"
+TMP_DIR="$(test_mktemp_dir "$ROOT_DIR")"
 trap 'rm -rf "$TMP_DIR"' EXIT
 
 export LEIKWAN_STATE_DIR="${TMP_DIR}/state"
@@ -35,11 +38,11 @@ ddns_timer_state() { printf 'active'; }
 ddns_timer_next_run() { printf 'Fri 2026-05-15 12:05:00 CST'; }
 out="$(ddns_status)"
 grep -q "timer: enabled" <<<"$out"
-grep -q "下次检测: Fri 2026-05-15 12:05:00 CST" <<<"$out"
+grep -q "下次检�? Fri 2026-05-15 12:05:00 CST" <<<"$out"
 
 ddns_timer_state() { printf 'disabled'; }
 out_disabled="$(ddns_status)"
 grep -q "timer: disabled" <<<"$out_disabled"
-grep -q "下次检测: 未启用" <<<"$out_disabled"
+grep -q "下次检�? 未启�? <<<"$out_disabled"
 
 echo "[OK] ddns status timer regression passed"

@@ -4,7 +4,10 @@ set -Eeuo pipefail
 ROOT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
-TMP_DIR="$(mktemp -d)"
+# shellcheck source=/dev/null
+source "$ROOT_DIR/tests/test-lib.sh"
+
+TMP_DIR="$(test_mktemp_dir "$ROOT_DIR")"
 trap 'rm -rf "$TMP_DIR"' EXIT
 
 export LEIKWAN_STATE_DIR="${TMP_DIR}/state"
@@ -56,10 +59,10 @@ assert_render 0 160
 
 export LEIKWAN_NO_CLEAR=1
 menu_out="$(print_init_wizard_menu)"
-grep -q "Leikwan 初始化向导" <<<"$menu_out"
-grep -q "B：利群主机" <<<"$menu_out"
+grep -q "Leikwan 初始化向�? <<<"$menu_out"
+grep -q "B：利群主�? <<<"$menu_out"
 main_out="$(print_main_menu_options)"
-grep -q "1. 快速组网" <<<"$main_out"
+grep -q "1. 快速组�? <<<"$main_out"
 grep -q "6. 高级维护" <<<"$main_out"
 ddns_out="$(print_ddns_menu_options)"
 grep -q "4. 查看 DDNS 日志" <<<"$ddns_out"

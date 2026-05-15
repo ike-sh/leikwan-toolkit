@@ -4,8 +4,11 @@ set -Eeuo pipefail
 ROOT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
+# shellcheck source=/dev/null
+source "$ROOT_DIR/tests/test-lib.sh"
+
 mkdir -p "$ROOT_DIR/.tmp"
-TMP_DIR="$(TMPDIR="$ROOT_DIR/.tmp" mktemp -d)"
+TMP_DIR="$(test_mktemp_dir "$ROOT_DIR")"
 trap 'rm -rf "$TMP_DIR"' EXIT
 
 export LEIKWAN_STATE_DIR="${TMP_DIR}/state"
@@ -45,9 +48,9 @@ install_packages() {
 
 LQ_AUTO_FIX_INSTALL_DNSUTILS=true
 out="$(doctor_auto_fix_dnsutils 2>&1)"
-grep -q "dig 不存在，正在安装 dnsutils 以启用多 DNS 解析器检测" <<<"$out"
+grep -q "dig 不存在，正在安装 dnsutils 以启用多 DNS 解析器检�? <<<"$out"
 grep -q "\[MOCK\] apt-get install -y dnsutils" <<<"$out"
-grep -q "dnsutils 已安装" <<<"$out"
+grep -q "dnsutils 已安�? <<<"$out"
 bad_msg="建议安装 d""nsutils"
 if grep -q "$bad_msg" <<<"$out"; then
   echo "FAIL: dnsutils path only suggested install instead of attempting it" >&2

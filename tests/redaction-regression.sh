@@ -4,7 +4,10 @@ set -Eeuo pipefail
 ROOT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
-TMP_DIR="$(mktemp -d)"
+# shellcheck source=/dev/null
+source "$ROOT_DIR/tests/test-lib.sh"
+
+TMP_DIR="$(test_mktemp_dir "$ROOT_DIR")"
 trap 'rm -rf "$TMP_DIR"' EXIT
 
 export LEIKWAN_STATE_DIR="${TMP_DIR}/state"
@@ -114,7 +117,7 @@ fi
 
 qr_out="$(output_qr 2>&1 || true)"
 if ! command -v qrencode >/dev/null 2>&1; then
-  grep -q "未安装 qrencode" <<<"$qr_out"
+  grep -q "未安�?qrencode" <<<"$qr_out"
 fi
 
 printf 'bad\n' >"${TMP_DIR}/evil-source"
@@ -125,7 +128,7 @@ if ln -s /root/.ssh/authorized_keys "${TMP_DIR}/evil-link" 2>/dev/null; then
   tar -czf "${TMP_DIR}/evil-symlink.tar.gz" -C "$TMP_DIR" evil-link
   evil_packages+=("${TMP_DIR}/evil-symlink.tar.gz")
 else
-  echo "[INFO] 当前文件系统不支持创建 symlink，跳过 symlink tar 构造。"
+  echo "[INFO] 当前文件系统不支持创�?symlink，跳�?symlink tar 构造�?
 fi
 
 for evil in "${evil_packages[@]}"; do
@@ -146,7 +149,7 @@ for evil in "${evil_packages[@]}"; do
     echo "$import_out" >&2
     exit 1
   }
-  if grep -q "错误：脚本在第" <<<"${inspect_out}${import_out}"; then
+  if grep -q "错误：脚本在�? <<<"${inspect_out}${import_out}"; then
     echo "FAIL: global trap triggered for evil package: ${evil}" >&2
     exit 1
   fi

@@ -4,7 +4,10 @@ set -Eeuo pipefail
 ROOT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
-TMP_DIR="$(mktemp -d)"
+# shellcheck source=/dev/null
+source "$ROOT_DIR/tests/test-lib.sh"
+
+TMP_DIR="$(test_mktemp_dir "$ROOT_DIR")"
 trap 'rm -rf "$TMP_DIR"' EXIT
 
 export LEIKWAN_STATE_DIR="${TMP_DIR}/state"
@@ -18,7 +21,7 @@ brief_out="$(bash leikwan-toolkit.sh --brief 2>&1)"
 grep -q "Leikwan Status" <<<"$brief_out"
 grep -q "Role:" <<<"$brief_out"
 grep -q "Health:" <<<"$brief_out"
-if grep -q "下一步建议" <<<"$brief_out"; then
+if grep -q "下一步建�? <<<"$brief_out"; then
   echo "FAIL: brief status printed full next-step section" >&2
   echo "$brief_out" >&2
   exit 1

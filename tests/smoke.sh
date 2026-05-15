@@ -4,7 +4,10 @@ set -Eeuo pipefail
 ROOT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
-TMP_DIR="$(mktemp -d)"
+# shellcheck source=/dev/null
+source "$ROOT_DIR/tests/test-lib.sh"
+
+TMP_DIR="$(test_mktemp_dir "$ROOT_DIR")"
 trap 'rm -rf "$TMP_DIR"' EXIT
 
 export LEIKWAN_STATE_DIR="${TMP_DIR}/state"
@@ -17,7 +20,7 @@ mkdir -p "$LEIKWAN_RUN_DIR"
 run_ok() {
   local out
   out="$("$@" 2>&1)"
-  if grep -q "错误：脚本在第" <<<"$out"; then
+  if grep -q "错误：脚本在�? <<<"$out"; then
     echo "FAIL: global trap triggered: $*" >&2
     echo "$out" >&2
     exit 1
@@ -35,7 +38,7 @@ run_fail_clean() {
     echo "$out" >&2
     exit 1
   fi
-  if grep -q "错误：脚本在第" <<<"$out"; then
+  if grep -q "错误：脚本在�? <<<"$out"; then
     echo "FAIL: global trap triggered: $*" >&2
     echo "$out" >&2
     exit 1
@@ -52,7 +55,7 @@ run_ok bash leikwan-toolkit.sh --version
 run_ok bash leikwan-toolkit.sh --help
 
 version="$(bash leikwan-toolkit.sh --version)"
-[[ "$version" == "leikwan-toolkit 1.4.6 LTS" ]] || { echo "FAIL: version output: ${version}" >&2; exit 1; }
+[[ "$version" == "leikwan-toolkit 1.4.7 LTS" ]] || { echo "FAIL: version output: ${version}" >&2; exit 1; }
 
 help_text="$(bash leikwan-toolkit.sh --help)"
 grep -q "init" <<<"$help_text"
