@@ -74,6 +74,9 @@ bash tests/update-regression.sh
 section "latest version regression"
 bash tests/update-latest-version-regression.sh
 
+section "latest no risky download regression"
+bash tests/update-latest-no-risky-download-regression.sh
+
 section "empty latest guard regression"
 bash tests/update-empty-latest-guard-regression.sh
 

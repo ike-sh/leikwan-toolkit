@@ -20,7 +20,7 @@ mkdir -p "$LEIKWAN_RUN_DIR"
 run_ok() {
   local out
   out="$("$@" 2>&1)"
-  if grep -q "错误：脚本在�? <<<"$out"; then
+  if grep -q "on_error" <<<"$out"; then
     echo "FAIL: global trap triggered: $*" >&2
     echo "$out" >&2
     exit 1
@@ -38,7 +38,7 @@ run_fail_clean() {
     echo "$out" >&2
     exit 1
   fi
-  if grep -q "错误：脚本在�? <<<"$out"; then
+  if grep -q "on_error" <<<"$out"; then
     echo "FAIL: global trap triggered: $*" >&2
     echo "$out" >&2
     exit 1
@@ -55,7 +55,7 @@ run_ok bash leikwan-toolkit.sh --version
 run_ok bash leikwan-toolkit.sh --help
 
 version="$(bash leikwan-toolkit.sh --version)"
-[[ "$version" == "leikwan-toolkit 1.4.7 LTS" ]] || { echo "FAIL: version output: ${version}" >&2; exit 1; }
+[[ "$version" == "leikwan-toolkit 1.4.8 LTS" ]] || { echo "FAIL: version output: ${version}" >&2; exit 1; }
 
 help_text="$(bash leikwan-toolkit.sh --help)"
 grep -q "init" <<<"$help_text"

@@ -85,27 +85,27 @@ curl() {
 
 [[ "$(github_download_mode)" == "mirror-first" ]]
 
-mapfile -t mirror_first < <(github_url_candidates "https://github.com/ike-sh/leikwan-toolkit/releases/download/v1.4.7/leikwan-toolkit-1.4.7.tar.gz")
-[[ "${mirror_first[0]}" == "https://mirror.example/https://github.com/ike-sh/leikwan-toolkit/releases/download/v1.4.7/leikwan-toolkit-1.4.7.tar.gz" ]]
-[[ "${mirror_first[1]}" == "https://github.com/ike-sh/leikwan-toolkit/releases/download/v1.4.7/leikwan-toolkit-1.4.7.tar.gz" ]]
+mapfile -t mirror_first < <(github_url_candidates "https://github.com/ike-sh/leikwan-toolkit/releases/download/v1.4.8/leikwan-toolkit-1.4.8.tar.gz")
+[[ "${mirror_first[0]}" == "https://mirror.example/https://github.com/ike-sh/leikwan-toolkit/releases/download/v1.4.8/leikwan-toolkit-1.4.8.tar.gz" ]]
+[[ "${mirror_first[1]}" == "https://github.com/ike-sh/leikwan-toolkit/releases/download/v1.4.8/leikwan-toolkit-1.4.8.tar.gz" ]]
 
 LEIKWAN_GITHUB_DOWNLOAD_MODE=origin-first
-mapfile -t origin_first < <(github_url_candidates "https://github.com/ike-sh/leikwan-toolkit/releases/download/v1.4.7/leikwan-toolkit-1.4.7.tar.gz")
-[[ "${origin_first[0]}" == "https://github.com/ike-sh/leikwan-toolkit/releases/download/v1.4.7/leikwan-toolkit-1.4.7.tar.gz" ]]
-[[ "${origin_first[1]}" == "https://mirror.example/https://github.com/ike-sh/leikwan-toolkit/releases/download/v1.4.7/leikwan-toolkit-1.4.7.tar.gz" ]]
+mapfile -t origin_first < <(github_url_candidates "https://github.com/ike-sh/leikwan-toolkit/releases/download/v1.4.8/leikwan-toolkit-1.4.8.tar.gz")
+[[ "${origin_first[0]}" == "https://github.com/ike-sh/leikwan-toolkit/releases/download/v1.4.8/leikwan-toolkit-1.4.8.tar.gz" ]]
+[[ "${origin_first[1]}" == "https://mirror.example/https://github.com/ike-sh/leikwan-toolkit/releases/download/v1.4.8/leikwan-toolkit-1.4.8.tar.gz" ]]
 LEIKWAN_GITHUB_DOWNLOAD_MODE=mirror-first
 
 dest="${TMP_DIR}/release.tar.gz"
-out="$(download_github_with_mirrors "https://github.com/ike-sh/leikwan-toolkit/releases/download/v1.4.7/leikwan-toolkit-1.4.7.tar.gz" "$dest" release 2>&1)"
+out="$(download_github_with_mirrors "https://github.com/ike-sh/leikwan-toolkit/releases/download/v1.4.8/leikwan-toolkit-1.4.8.tar.gz" "$dest" release 2>&1)"
 grep -Eq 'GitHub .*mirror-first' <<<"$out"
-grep -q "https://mirror.example/https://github.com/ike-sh/leikwan-toolkit/releases/download/v1.4.7/leikwan-toolkit-1.4.7.tar.gz" <<<"$out"
+grep -q "https://mirror.example/https://github.com/ike-sh/leikwan-toolkit/releases/download/v1.4.8/leikwan-toolkit-1.4.8.tar.gz" <<<"$out"
 grep -q "[OK]" <<<"$out"
 grep -q '^ok$' "$dest"
-[[ "$(sed -n '1p' "$download_attempts")" == "https://mirror.example/https://github.com/ike-sh/leikwan-toolkit/releases/download/v1.4.7/leikwan-toolkit-1.4.7.tar.gz" ]]
+[[ "$(sed -n '1p' "$download_attempts")" == "https://mirror.example/https://github.com/ike-sh/leikwan-toolkit/releases/download/v1.4.8/leikwan-toolkit-1.4.8.tar.gz" ]]
 
 : >"$download_attempts"
-download_github_with_mirrors "https://github.com/ike-sh/leikwan-toolkit/releases/download/v1.4.7/leikwan-toolkit-1.4.7.tar.gz.sha256" "${TMP_DIR}/sha256" sha256 >/dev/null 2>&1
-[[ "$(sed -n '1p' "$download_attempts")" == "https://mirror.example/https://github.com/ike-sh/leikwan-toolkit/releases/download/v1.4.7/leikwan-toolkit-1.4.7.tar.gz.sha256" ]]
+download_github_with_mirrors "https://github.com/ike-sh/leikwan-toolkit/releases/download/v1.4.8/leikwan-toolkit-1.4.8.tar.gz.sha256" "${TMP_DIR}/sha256" sha256 >/dev/null 2>&1
+[[ "$(sed -n '1p' "$download_attempts")" == "https://mirror.example/https://github.com/ike-sh/leikwan-toolkit/releases/download/v1.4.8/leikwan-toolkit-1.4.8.tar.gz.sha256" ]]
 
 : >"$download_attempts"
 download_github_with_mirrors "https://raw.githubusercontent.com/ike-sh/leikwan-toolkit/main/scripts/bootstrap.sh" "${TMP_DIR}/raw" raw >/dev/null 2>&1

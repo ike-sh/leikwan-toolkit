@@ -15,17 +15,20 @@ export LEIKWAN_BACKUP_DIR="${TMP_DIR}/backups"
 export LEIKWAN_RUN_DIR="${TMP_DIR}/run"
 export LEIKWAN_LOG_DISABLED=1
 export LEIKWAN_NO_CLEAR=1
-export LEIKWAN_GITHUB_MIRRORS="https://mirror.example/"
+export LEIKWAN_GITHUB_MIRRORS="https://download-one.example/,https://download-two.example/"
 unset LEIKWAN_GITHUB_DOWNLOAD_MODE
+unset LEIKWAN_GITHUB_METADATA_MODE
+unset LEIKWAN_GITHUB_METADATA_MIRRORS
 mkdir -p "$LEIKWAN_RUN_DIR"
 
 # shellcheck source=/dev/null
 source "$ROOT_DIR/leikwan-toolkit.sh"
 
 attempts="${TMP_DIR}/attempts"
+args_log="${TMP_DIR}/args"
 
 curl() {
-  local output="" arg url="" effective=0
+  local output="" arg url="" effective=0 max_time="" connect_timeout="" retry=""
   while (($# > 0)); do
     arg="$1"
     case "$arg" in
@@ -37,7 +40,19 @@ curl() {
         effective=1
         shift 2
         ;;
-      --connect-timeout|--max-time|--retry|--speed-time|--speed-limit|--range|-r)
+      --connect-timeout)
+        connect_timeout="$2"
+        shift 2
+        ;;
+      --max-time)
+        max_time="$2"
+        shift 2
+        ;;
+      --retry)
+        retry="$2"
+        shift 2
+        ;;
+      --speed-time|--speed-limit|--range|-r)
         shift 2
         ;;
       -*)
@@ -50,34 +65,52 @@ curl() {
     esac
   done
   printf '%s\n' "$url" >>"$attempts"
-  case "${SCENARIO:-api}" in
+  printf 'url=%s connect=%s max=%s retry=%s effective=%s\n' "$url" "$connect_timeout" "$max_time" "$retry" "$effective" >>"$args_log"
+  case "${SCENARIO:-version}" in
+    version)
+      if [[ "$url" == *"/VERSION" ]]; then
+        printf '1.4.8\n' >"$output"
+        return 0
+      fi
+      ;;
     api)
-      if [[ "$url" == *api.github.com*/releases/latest* && "$effective" == 0 ]]; then
-        printf '{"tag_name":"v1.4.6"}\n' >"$output"
+      if [[ "$url" == *"/VERSION" ]]; then
+        printf '<html>bad gateway</html>\n' >"$output"
+        return 0
+      fi
+      if [[ "$url" == "https://api.github.com/repos/ike-sh/leikwan-toolkit/releases/latest" && "$effective" == 0 ]]; then
+        printf '{"tag_name":"v1.4.8"}\n' >"$output"
         return 0
       fi
       ;;
     redirect)
-      if [[ "$url" == *api.github.com*/releases/latest* && "$effective" == 0 ]]; then
+      if [[ "$url" == *"/VERSION" ]]; then
+        : >"$output"
+        return 0
+      fi
+      if [[ "$url" == "https://api.github.com/repos/ike-sh/leikwan-toolkit/releases/latest" && "$effective" == 0 ]]; then
         printf '<html>bad gateway</html>\n' >"$output"
         return 0
       fi
-      if [[ "$url" == *github.com*/releases/latest* && "$effective" == 1 ]]; then
-        printf 'https://github.com/ike-sh/leikwan-toolkit/releases/tag/v1.4.6'
+      if [[ "$url" == "https://github.com/ike-sh/leikwan-toolkit/releases/latest" && "$effective" == 1 ]]; then
+        printf 'https://github.com/ike-sh/leikwan-toolkit/releases/tag/v1.4.8'
         return 0
       fi
       ;;
     tags)
-      if [[ "$url" == *api.github.com*/releases/latest* && "$effective" == 0 ]]; then
+      if [[ "$url" == *"/VERSION" ]]; then
+        return 22
+      fi
+      if [[ "$url" == *"/releases/latest" && "$effective" == 0 ]]; then
         : >"$output"
         return 0
       fi
-      if [[ "$url" == *github.com*/releases/latest* && "$effective" == 1 ]]; then
+      if [[ "$url" == *"/releases/latest" && "$effective" == 1 ]]; then
         printf 'https://github.com/ike-sh/leikwan-toolkit/releases'
         return 0
       fi
-      if [[ "$url" == *api.github.com*/tags* && "$effective" == 0 ]]; then
-        printf '[{"name":"v1.4.5"},{"name":"v1.4.7"},{"name":"v1.4.6"},{"name":"not-semver"}]\n' >"$output"
+      if [[ "$url" == "https://api.github.com/repos/ike-sh/leikwan-toolkit/tags" && "$effective" == 0 ]]; then
+        printf '[{"name":"v1.4.6"},{"name":"v1.4.8"},{"name":"v1.4.7"},{"name":"not-semver"}]\n' >"$output"
         return 0
       fi
       ;;
@@ -88,29 +121,55 @@ curl() {
   return 22
 }
 
+SCENARIO=version
+: >"$attempts"
+: >"$args_log"
+[[ "$(get_latest_release_version)" == "1.4.8" ]]
+grep -q '/VERSION' "$attempts"
+! grep -q 'api.github.com' "$attempts"
+
 SCENARIO=api
 : >"$attempts"
-[[ "$(get_latest_release_version)" == "1.4.6" ]]
-[[ "$(sed -n '1p' "$attempts")" == "https://mirror.example/https://api.github.com/repos/ike-sh/leikwan-toolkit/releases/latest" ]]
-
-LEIKWAN_GITHUB_DOWNLOAD_MODE=origin-first
-: >"$attempts"
-[[ "$(get_latest_release_version)" == "1.4.6" ]]
-[[ "$(sed -n '1p' "$attempts")" == "https://api.github.com/repos/ike-sh/leikwan-toolkit/releases/latest" ]]
-LEIKWAN_GITHUB_DOWNLOAD_MODE=mirror-first
+[[ "$(get_latest_release_version)" == "1.4.8" ]]
+first_api="$(grep 'api.github.com' "$attempts" | sed -n '1p')"
+[[ "$first_api" == "https://api.github.com/repos/ike-sh/leikwan-toolkit/releases/latest" ]]
+api_host_pattern='api.github.com'
+proxy_pattern='download-one|download-two|gh-pro''xy|gh.ll''kk|gh''proxy'
+if grep "$api_host_pattern" "$attempts" | grep -Eq "$proxy_pattern"; then
+  echo "FAIL: fast metadata mode proxied GitHub API through download mirrors" >&2
+  cat "$attempts" >&2
+  exit 1
+fi
 
 SCENARIO=redirect
-[[ "$(get_latest_release_version)" == "1.4.6" ]]
+: >"$attempts"
+[[ "$(get_latest_release_version)" == "1.4.8" ]]
+grep -q 'https://github.com/ike-sh/leikwan-toolkit/releases/latest' "$attempts"
 
 SCENARIO=tags
-[[ "$(get_latest_release_version)" == "1.4.7" ]]
+: >"$attempts"
+[[ "$(get_latest_release_version)" == "1.4.8" ]]
 
 SCENARIO=fail
 out="$(update_check 2>&1 || true)"
-grep -q "无法获取最新版本：GitHub API / latest redirect / tags 均失败。" <<<"$out"
+grep -q "无法快速获取最新版本。" <<<"$out"
 if grep -Eq '最新版本：[[:space:]]*$' <<<"$out"; then
   echo "FAIL: update check printed an empty latest version" >&2
   echo "$out" >&2
+  exit 1
+fi
+
+SCENARIO=fail
+LEIKWAN_GITHUB_METADATA_MODE=full
+LEIKWAN_GITHUB_METADATA_TIMEOUT=9
+: >"$args_log"
+get_latest_release_version >/dev/null 2>&1 || true
+grep -q 'max=8' "$args_log"
+if awk -F'max=' 'NF > 1 {split($2,a," "); if (a[1] > 8) exit 1}' "$args_log"; then
+  :
+else
+  echo "FAIL: metadata curl max-time exceeded short timeout" >&2
+  cat "$args_log" >&2
   exit 1
 fi
 

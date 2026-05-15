@@ -1,5 +1,12 @@
 # Release Notes
 
+## 1.4.8 LTS
+
+- 修复 `lq update check` 风控式轮询 GitHub 镜像池的问题，latest 元数据查询默认改为轻量 `fast` 模式。
+- 新增根目录 `VERSION` 文件，优先通过 raw VERSION 读取最新版本，减少 GitHub API 风控和代理兼容问题。
+- API latest、latest redirect、tags API 默认只走官方短 timeout；完整探测需显式设置 `LEIKWAN_GITHUB_METADATA_MODE=full`。
+- 保留 release tar.gz、sha256 和 EasyTier 大文件下载的 `mirror-first` 策略、缓存、禁止跨镜像 resume 和 sha256 校验。
+
 ## 1.4.7 LTS
 
 - GitHub 下载默认改为 `mirror-first`，官方 GitHub 保留为最后兜底。

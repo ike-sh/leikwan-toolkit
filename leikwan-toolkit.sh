@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-TOOL_VERSION="1.4.7"
+TOOL_VERSION="1.4.8"
 RELEASE_CHANNEL="LTS"
 PROJECT_NAME="leikwan-toolkit"
 PROJECT_TITLE="利群快速组网工具"
 PROJECT_GITHUB="https://github.com/ike-sh/leikwan-toolkit"
 LEIKWAN_GITHUB_DOWNLOAD_MODE="${LEIKWAN_GITHUB_DOWNLOAD_MODE:-mirror-first}"
+LEIKWAN_GITHUB_METADATA_MODE="${LEIKWAN_GITHUB_METADATA_MODE:-fast}"
 LEIKWAN_GITHUB_MIRRORS_DEFAULT="${LEIKWAN_GITHUB_MIRRORS_DEFAULT:-https://gh-proxy.com/,https://gh.llkk.cc/,https://gh.ddlc.top/,https://ghproxy.net/,https://mirror.ghproxy.com/,https://cf.ghproxy.cc/,https://gh.api.99988866.xyz/,https://github.akams.cn/}"
 
 DRY_RUN=0
@@ -21,6 +22,8 @@ REPORT_WARN_COUNT=0
 REPORT_FAIL_COUNT=0
 PORT_CHECK_RESULT="ok"
 STATUS_OVERVIEW_RESULT="ok"
+LATEST_METADATA_STARTED_AT=0
+LATEST_METADATA_BUDGET=20
 LEIKWAN_GLOBAL_LOCK_TOKEN=""
 UPDATE_RELOAD_AFTER_ACTION=0
 DOCTOR_SUMMARY_OVERALL=""
@@ -1776,6 +1779,10 @@ dl_warn() { printf '[WARN] %s\n' "$*" >&2; }
 dl_ok() { printf '[OK] %s\n' "$*" >&2; }
 dl_fail() { printf '[FAIL] %s\n' "$*" >&2; }
 dl_error() { printf '[ERROR] %s\n' "$*" >&2; }
+dl_debug() {
+  [[ "${LEIKWAN_DEBUG:-0}" == "1" ]] || return 0
+  printf '[DEBUG] %s\n' "$*" >&2
+}
 
 easytier_api_asset_url() {
   local version="$1" arch="$2" api re tmp result
@@ -1819,6 +1826,17 @@ github_download_mode() {
     *)
       dl_warn "LEIKWAN_GITHUB_DOWNLOAD_MODE 无效：${mode}，使用 mirror-first。"
       printf '%s' "mirror-first"
+      ;;
+  esac
+}
+
+github_metadata_mode() {
+  local mode="${LEIKWAN_GITHUB_METADATA_MODE:-fast}"
+  case "$mode" in
+    fast|full) printf '%s' "$mode" ;;
+    *)
+      dl_warn "LEIKWAN_GITHUB_METADATA_MODE 无效：${mode}，使用 fast。"
+      printf '%s' "fast"
       ;;
   esac
 }
@@ -2145,58 +2163,200 @@ latest_parse_release_html() {
   printf '%s' "$best"
 }
 
-latest_release_from_api_latest() {
-  local api tmp version
-  api="https://api.github.com/repos/${UPDATE_REPO}/releases/latest"
-  tmp="$(make_temp_file leikwan-latest-api)"
-  dl_info "正在尝试 GitHub API latest：${api}"
-  if download_github_with_mirrors "$api" "$tmp" api; then
-    version="$(latest_parse_json_tag "$tmp" 2>/dev/null || true)"
-    rm -f "$tmp"
-    [[ -n "$version" ]] && { printf '%s' "$version"; return 0; }
+latest_parse_version_file() {
+  local file="$1" version
+  [[ -s "$file" ]] || return 1
+  downloaded_file_looks_like_html "$file" && return 1
+  version="$(head -n 1 "$file" 2>/dev/null | tr -d '\r' | awk '{$1=$1; print}')"
+  release_version_from_tag "$version"
+}
+
+metadata_time_budget() {
+  local mode="$1" budget
+  if [[ -n "${LEIKWAN_GITHUB_METADATA_TIMEOUT:-}" && "${LEIKWAN_GITHUB_METADATA_TIMEOUT}" =~ ^[0-9]+$ ]]; then
+    budget="$LEIKWAN_GITHUB_METADATA_TIMEOUT"
+  elif [[ "$mode" == "full" ]]; then
+    budget=20
   else
-    rm -f "$tmp"
+    budget=20
   fi
-  dl_warn "当前源无法解析 latest，切换下一路径。"
+  (( budget < 1 )) && budget=1
+  printf '%s' "$budget"
+}
+
+metadata_remaining_seconds() {
+  local now deadline remaining
+  now="$(date +%s)"
+  deadline=$(( LATEST_METADATA_STARTED_AT + LATEST_METADATA_BUDGET ))
+  remaining=$(( deadline - now ))
+  (( remaining > 0 )) || return 1
+  printf '%s' "$remaining"
+}
+
+metadata_curl_max_time() {
+  local desired="${1:-8}" remaining
+  remaining="$(metadata_remaining_seconds)" || return 1
+  (( remaining < desired )) && desired="$remaining"
+  (( desired > 0 )) || return 1
+  printf '%s' "$desired"
+}
+
+metadata_mirror_values() {
+  local mode="$1" purpose="${2:-api}" mirrors mirror
+  local -a mirror_list=()
+  mirrors="${LEIKWAN_GITHUB_METADATA_MIRRORS:-}"
+  mirrors="${mirrors//;/,}"
+  if [[ -n "$mirrors" ]]; then
+    IFS=',' read -r -a mirror_list <<<"$mirrors"
+  elif [[ "$purpose" == "version" && "$mode" == "fast" ]]; then
+    mirror_list=("https://gh-proxy.com/" "https://gh.llkk.cc/")
+  elif [[ "$mode" == "full" ]]; then
+    while IFS= read -r mirror; do
+      [[ -n "$mirror" ]] && mirror_list+=("$mirror")
+    done < <(github_mirror_values)
+  fi
+  for mirror in "${mirror_list[@]}"; do
+    mirror="$(trim_spaces "$mirror")"
+    [[ -n "$mirror" ]] || continue
+    printf '%s\n' "$mirror"
+  done
+}
+
+github_metadata_candidates() {
+  local raw_url="$1" purpose="$2" mode="$3" mirror candidate seen_line
+  local -a ordered=() seen=()
+  if [[ "$purpose" == "version" ]]; then
+    while IFS= read -r mirror; do
+      [[ -n "$mirror" ]] || continue
+      ordered+=("$(mirror_url_for "$mirror" "$raw_url")")
+    done < <(metadata_mirror_values "$mode" "$purpose")
+    ordered+=("$raw_url")
+  else
+    ordered+=("$raw_url")
+    if [[ -n "${LEIKWAN_GITHUB_METADATA_MIRRORS:-}" || "$mode" == "full" ]]; then
+      while IFS= read -r mirror; do
+        [[ -n "$mirror" ]] || continue
+        candidate="$(mirror_url_for "$mirror" "$raw_url")"
+        ordered+=("$candidate")
+      done < <(metadata_mirror_values "$mode" "$purpose")
+    fi
+  fi
+  for candidate in "${ordered[@]}"; do
+    [[ -n "$candidate" ]] || continue
+    for seen_line in "${seen[@]}"; do
+      [[ "$seen_line" == "$candidate" ]] && continue 2
+    done
+    seen+=("$candidate")
+    printf '%s\n' "$candidate"
+  done
+}
+
+metadata_fetch_to_file() {
+  local url="$1" output="$2" label="${3:-metadata}" timeout err rc
+  command -v curl >/dev/null 2>&1 || return 127
+  timeout="$(metadata_curl_max_time 8)" || return 124
+  err="$(make_temp_file leikwan-metadata-curl)"
+  if curl -fsSL --retry 0 --connect-timeout 5 --max-time "$timeout" -o "$output" "$url" 2>"$err"; then
+    rm -f "$err"
+    return 0
+  fi
+  rc=$?
+  dl_debug "${label} 请求失败(${rc})：${url} $(head -n 1 "$err" 2>/dev/null || true)"
+  rm -f "$err"
+  return "$rc"
+}
+
+metadata_fetch_effective_url() {
+  local url="$1" label="${2:-redirect}" timeout err effective rc
+  command -v curl >/dev/null 2>&1 || return 127
+  timeout="$(metadata_curl_max_time 8)" || return 124
+  err="$(make_temp_file leikwan-metadata-redirect)"
+  effective="$(curl -fsSLI --retry 0 --connect-timeout 5 --max-time "$timeout" -o /dev/null -w '%{url_effective}' "$url" 2>"$err")"
+  rc=$?
+  if (( rc == 0 )) && [[ -n "$effective" ]]; then
+    rm -f "$err"
+    printf '%s' "$effective"
+    return 0
+  fi
+  dl_debug "${label} 请求失败(${rc})：${url} $(head -n 1 "$err" 2>/dev/null || true)"
+  rm -f "$err"
+  return "$rc"
+}
+
+latest_release_from_version_file() {
+  local mode="$1" raw_url candidate tmp version
+  raw_url="https://raw.githubusercontent.com/${UPDATE_REPO}/main/VERSION"
+  while IFS= read -r candidate; do
+    [[ -n "$candidate" ]] || continue
+    metadata_remaining_seconds >/dev/null || return 1
+    tmp="$(make_temp_file leikwan-version)"
+    dl_info "正在读取 VERSION：${candidate}"
+    if metadata_fetch_to_file "$candidate" "$tmp" VERSION; then
+      version="$(latest_parse_version_file "$tmp" 2>/dev/null || true)"
+      rm -f "$tmp"
+      [[ -n "$version" ]] && { printf '%s' "$version"; return 0; }
+      dl_debug "VERSION 内容无法解析：${candidate}"
+    else
+      rm -f "$tmp"
+    fi
+  done < <(github_metadata_candidates "$raw_url" version "$mode")
+  return 1
+}
+
+latest_release_from_api_latest() {
+  local mode="${1:-fast}" api candidate tmp version
+  api="https://api.github.com/repos/${UPDATE_REPO}/releases/latest"
+  while IFS= read -r candidate; do
+    [[ -n "$candidate" ]] || continue
+    metadata_remaining_seconds >/dev/null || return 1
+    tmp="$(make_temp_file leikwan-latest-api)"
+    dl_debug "正在请求 GitHub API latest：${candidate}"
+    if metadata_fetch_to_file "$candidate" "$tmp" api-latest; then
+      version="$(latest_parse_json_tag "$tmp" 2>/dev/null || true)"
+      rm -f "$tmp"
+      [[ -n "$version" ]] && { printf '%s' "$version"; return 0; }
+      dl_debug "GitHub API latest 内容无法解析：${candidate}"
+    else
+      rm -f "$tmp"
+    fi
+  done < <(github_metadata_candidates "$api" api "$mode")
   return 1
 }
 
 latest_release_from_redirect() {
-  local raw_url candidate kind effective version tag mode
+  local mode="${1:-fast}" raw_url candidate effective version tag
   command -v curl >/dev/null 2>&1 || return 1
   raw_url="https://github.com/${UPDATE_REPO}/releases/latest"
-  mode="$(github_download_mode)"
-  dl_info "GitHub 下载策略：${mode}"
   while IFS= read -r candidate; do
     [[ -n "$candidate" ]] || continue
-    kind="$(github_candidate_kind "$candidate" "$raw_url")"
-    if [[ "$kind" == "mirror" ]]; then
-      dl_info "正在尝试 latest redirect 镜像：${candidate}"
-    else
-      dl_info "正在尝试 latest redirect 官方：${candidate}"
-    fi
-    effective="$(curl -fsSLI --retry 0 --connect-timeout 8 --max-time 30 -o /dev/null -w '%{url_effective}' "$candidate" 2>/dev/null || true)"
+    metadata_remaining_seconds >/dev/null || return 1
+    dl_debug "正在解析 latest redirect：${candidate}"
+    effective="$(metadata_fetch_effective_url "$candidate" latest-redirect || true)"
     tag="$(printf '%s' "$effective" | sed -n 's#.*\/releases\/tag\/\(v\{0,1\}[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\).*#\1#p' | head -n 1)"
     version="$(release_version_from_tag "$tag" 2>/dev/null || true)"
     [[ -n "$version" ]] && { printf '%s' "$version"; return 0; }
-    dl_warn "当前源无法解析 latest，切换下一路径。"
-  done < <(github_url_candidates "$raw_url")
+    dl_debug "latest redirect 无法解析版本：${candidate}"
+  done < <(github_metadata_candidates "$raw_url" redirect "$mode")
   return 1
 }
 
 latest_release_from_tags_api() {
-  local api tmp version
+  local mode="${1:-fast}" api candidate tmp version
   api="https://api.github.com/repos/${UPDATE_REPO}/tags"
-  tmp="$(make_temp_file leikwan-tags-api)"
-  dl_info "正在尝试 GitHub tags API：${api}"
-  if download_github_with_mirrors "$api" "$tmp" api; then
-    version="$(latest_parse_tags_json "$tmp" 2>/dev/null || true)"
-    rm -f "$tmp"
-    [[ -n "$version" ]] && { printf '%s' "$version"; return 0; }
-  else
-    rm -f "$tmp"
-  fi
-  dl_warn "当前源无法解析 latest，切换下一路径。"
+  while IFS= read -r candidate; do
+    [[ -n "$candidate" ]] || continue
+    metadata_remaining_seconds >/dev/null || return 1
+    tmp="$(make_temp_file leikwan-tags-api)"
+    dl_debug "正在请求 GitHub tags API：${candidate}"
+    if metadata_fetch_to_file "$candidate" "$tmp" tags-api; then
+      version="$(latest_parse_tags_json "$tmp" 2>/dev/null || true)"
+      rm -f "$tmp"
+      [[ -n "$version" ]] && { printf '%s' "$version"; return 0; }
+      dl_debug "GitHub tags API 内容无法解析：${candidate}"
+    else
+      rm -f "$tmp"
+    fi
+  done < <(github_metadata_candidates "$api" api "$mode")
   return 1
 }
 
@@ -2217,18 +2377,27 @@ latest_release_from_html() {
 }
 
 get_latest_release_version() {
-  local version
-  dl_info "正在获取最新版本，策略：$(github_download_mode)"
-  version="$(latest_release_from_api_latest || true)"
+  local version mode
+  mode="$(github_metadata_mode)"
+  LATEST_METADATA_STARTED_AT="$(date +%s)"
+  LATEST_METADATA_BUDGET="$(metadata_time_budget "$mode")"
+  dl_info "正在获取最新版本，模式：${mode}"
+  version="$(latest_release_from_version_file "$mode" || true)"
   [[ -n "$version" ]] && { printf '%s' "$version"; return 0; }
-  version="$(latest_release_from_redirect || true)"
+  version="$(latest_release_from_api_latest "$mode" || true)"
   [[ -n "$version" ]] && { printf '%s' "$version"; return 0; }
-  version="$(latest_release_from_tags_api || true)"
+  version="$(latest_release_from_redirect "$mode" || true)"
   [[ -n "$version" ]] && { printf '%s' "$version"; return 0; }
-  version="$(latest_release_from_html || true)"
+  version="$(latest_release_from_tags_api "$mode" || true)"
   [[ -n "$version" ]] && { printf '%s' "$version"; return 0; }
-  dl_warn "无法获取最新版本：GitHub API / latest redirect / tags 均失败。"
-  dl_info "可直接尝试“更新到最新版本”，或检查网络 / 镜像配置。"
+  if [[ "$mode" == "fast" ]]; then
+    dl_warn "无法快速获取最新版本。"
+    dl_info "可直接选择“更新到最新版本”，或设置 LEIKWAN_TARGET_VERSION=1.4.8 后重试。"
+    dl_info "如需完整探测，可设置 LEIKWAN_GITHUB_METADATA_MODE=full。"
+  else
+    dl_warn "无法获取最新版本。"
+    dl_info "可设置 LEIKWAN_TARGET_VERSION=1.4.8 后重试，或检查网络 / 镜像配置。"
+  fi
   return 1
 }
 
@@ -2447,8 +2616,9 @@ update_check() {
   info "当前运行进程：${TOOL_VERSION}"
   latest_version="$(get_latest_release_version)" || return 1
   if [[ -z "$latest_version" ]]; then
-    warn "无法获取最新版本：GitHub API / latest redirect / tags 均失败。"
-    info "可直接尝试“更新到最新版本”，或检查网络 / 镜像配置。"
+    warn "无法快速获取最新版本。"
+    info "可直接选择“更新到最新版本”，或设置 LEIKWAN_TARGET_VERSION=1.4.8 后重试。"
+    info "如需完整探测，可设置 LEIKWAN_GITHUB_METADATA_MODE=full。"
     return 1
   fi
   if [[ -z "$installed_norm" ]]; then
@@ -2462,9 +2632,10 @@ update_check() {
     info "建议重新进入菜单：lq"
   fi
   if version_gt "$latest_version" "$installed_version"; then
+    info "发现新版本：${latest_version}"
     info "可执行：lq update run"
   else
-    ok "当前已是最新版本：${installed_version}"
+    ok "当前已是最新版本。"
     if [[ -n "$running_norm" ]] && update_versions_differ "$installed_version" "$TOOL_VERSION"; then
       info "当前菜单仍在旧进程中运行，退出后重新执行 lq 即可使用新版本。"
     fi
@@ -2568,12 +2739,12 @@ update_run() {
       [[ -n "$latest_version" ]] || { fail "LEIKWAN_TARGET_VERSION 无效：${LEIKWAN_TARGET_VERSION}"; exit 1; }
       tag="v${latest_version}"
     else
-      latest="$(update_latest_release)" || { dl_error "无法确定最新版本，已取消更新。"; dl_info "可设置 LEIKWAN_TARGET_VERSION=1.4.7 后重试。"; exit 1; }
+      latest="$(update_latest_release)" || { dl_error "无法确定最新版本，已取消更新。"; dl_info "可设置 LEIKWAN_TARGET_VERSION=1.4.8 后重试。"; exit 1; }
       IFS=$'\t' read -r tag latest_version <<<"$latest"
     fi
     if [[ -z "${latest_version:-}" ]] || ! release_version_from_tag "$latest_version" >/dev/null 2>&1; then
       dl_error "无法确定最新版本，已取消更新。"
-      dl_info "可设置 LEIKWAN_TARGET_VERSION=1.4.7 后重试。"
+      dl_info "可设置 LEIKWAN_TARGET_VERSION=1.4.8 后重试。"
       exit 1
     fi
     if [[ -z "${tag:-}" ]] || ! release_version_from_tag "$tag" >/dev/null 2>&1; then

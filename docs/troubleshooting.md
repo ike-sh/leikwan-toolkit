@@ -86,7 +86,7 @@ relay 重启后 easytier-cli 的 peer 列表可能短时间未刷新。脚本会
 
 ## EasyTier 下载
 
-1.4.7 起，GitHub 下载默认使用 `LEIKWAN_GITHUB_DOWNLOAD_MODE=mirror-first`：先尝试镜像池，再把官方 GitHub 作为最后兜底。需要改回官方优先时设置：
+1.4.8 起，GitHub 大文件下载默认继续使用 `LEIKWAN_GITHUB_DOWNLOAD_MODE=mirror-first`：先尝试镜像池，再把官方 GitHub 作为最后兜底。需要改回官方优先时设置：
 
 ```bash
 export LEIKWAN_GITHUB_DOWNLOAD_MODE=origin-first
@@ -112,17 +112,28 @@ EasyTier 成功下载的安装包会缓存到：
 
 ## 最新版本检查
 
-如果 `lq update check` 无法取得 latest，会明确输出：
+`lq update check` 默认使用轻量 metadata fast 模式，不会把 `api.github.com` 或 `releases/latest` redirect 套进整套大文件下载镜像池里轮询。它会优先读取仓库根目录 `VERSION` 文件，然后短 timeout 尝试官方 API latest、官方 latest redirect 和官方 tags API。
+
+如果 `lq update check` 无法快速取得 latest，会明确输出：
 
 ```text
-[WARN] 无法获取最新版本：GitHub API / latest redirect / tags 均失败。
+[WARN] 无法快速获取最新版本。
+[INFO] 可直接选择“更新到最新版本”，或设置 LEIKWAN_TARGET_VERSION=1.4.8 后重试。
+[INFO] 如需完整探测，可设置 LEIKWAN_GITHUB_METADATA_MODE=full。
 ```
 
-这时不会输出空的“最新版本”，也不会构造空版本下载 URL。可检查网络 / 镜像配置，或在确认版本号后使用：
+这时不会输出空的“最新版本”，也不会构造空版本下载 URL。可检查网络，或在确认版本号后使用：
 
 ```bash
-export LEIKWAN_TARGET_VERSION=1.4.7
+export LEIKWAN_TARGET_VERSION=1.4.8
 lq update run
+```
+
+如需手动排查完整 metadata fallback：
+
+```bash
+export LEIKWAN_GITHUB_METADATA_MODE=full
+lq update check
 ```
 
 ## 端口混淆

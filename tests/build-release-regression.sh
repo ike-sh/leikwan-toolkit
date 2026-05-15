@@ -8,6 +8,8 @@ cd "$ROOT_DIR"
 source "$ROOT_DIR/tests/test-lib.sh"
 
 version="$(awk -F= '$1=="TOOL_VERSION" {gsub(/"/, "", $2); print $2; exit}' leikwan-toolkit.sh)"
+version_file="$(tr -d '[:space:]' < VERSION)"
+[[ "$version_file" == "$version" ]] || { echo "FAIL: VERSION must match TOOL_VERSION" >&2; exit 1; }
 mkdir -p "$ROOT_DIR/.tmp"
 out="$(test_mktemp_file "$ROOT_DIR" "build-release-test.out.XXXXXX")"
 list="$(test_mktemp_file "$ROOT_DIR" "build-release-list.XXXXXX")"
@@ -23,6 +25,7 @@ sha="${pkg}.sha256"
 tar -tzf "$pkg" >"$list"
 
 grep -q "leikwan-toolkit-${version}/README.md" "$list"
+grep -q "leikwan-toolkit-${version}/VERSION" "$list"
 grep -q "leikwan-toolkit-${version}/leikwan-toolkit.sh" "$list"
 grep -q "leikwan-toolkit-${version}/scripts/bootstrap.sh" "$list"
 grep -q "leikwan-toolkit-${version}/scripts/build-release.sh" "$list"
@@ -36,6 +39,10 @@ if grep -Eq '(^|/)(panel|controller|agent|web|edge-tunnel-panel)(/|$)' "$list"; 
 fi
 
 grep -q "${pkg##*/}" "$sha"
+[[ "$(tar -xOf "$pkg" "leikwan-toolkit-${version}/VERSION" | tr -d '[:space:]')" == "$version" ]] || {
+  echo "FAIL: package VERSION does not match TOOL_VERSION" >&2
+  exit 1
+}
 if grep -Eq '^[A-Fa-f0-9]{64}[[:space:]]+/' "$sha"; then
   echo "FAIL: sha256 file contains absolute path" >&2
   cat "$sha" >&2

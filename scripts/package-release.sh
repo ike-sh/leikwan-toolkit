@@ -4,6 +4,11 @@ set -Eeuo pipefail
 ROOT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 DIST_DIR="${ROOT_DIR}/dist"
 PACKAGE_VERSION="$(grep -E '^TOOL_VERSION=' "${ROOT_DIR}/leikwan-toolkit.sh" | head -n 1 | cut -d= -f2 | tr -d '"')"
+VERSION_FILE_VALUE="$(tr -d '[:space:]' < "${ROOT_DIR}/VERSION" 2>/dev/null || true)"
+if [[ -z "$PACKAGE_VERSION" || "$VERSION_FILE_VALUE" != "$PACKAGE_VERSION" ]]; then
+  echo "FAIL: VERSION 文件必须与 TOOL_VERSION 一致" >&2
+  exit 1
+fi
 PACKAGE_NAME="leikwan-toolkit-${PACKAGE_VERSION}"
 STAGING_DIR="${DIST_DIR}/${PACKAGE_NAME}"
 PACKAGE_PATH="${DIST_DIR}/${PACKAGE_NAME}.tar.gz"
@@ -42,7 +47,7 @@ rm -rf "$DIST_DIR"
 mkdir -p "$DIST_DIR"
 mkdir -p "$STAGING_DIR"
 
-cp leikwan-toolkit.sh README.md "$STAGING_DIR/"
+cp leikwan-toolkit.sh README.md VERSION "$STAGING_DIR/"
 cp -R docs "$STAGING_DIR/docs"
 mkdir -p "$STAGING_DIR/scripts"
 cp scripts/package-release.sh scripts/build-release.sh scripts/check-redaction.sh scripts/bootstrap.sh "$STAGING_DIR/scripts/"
