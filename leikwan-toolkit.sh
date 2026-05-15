@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-TOOL_VERSION="1.4.9"
+TOOL_VERSION="1.4.10"
 RELEASE_CHANNEL="LTS"
 PROJECT_NAME="leikwan-toolkit"
 PROJECT_TITLE="利群快速组网工具"
@@ -2426,11 +2426,11 @@ get_latest_release_version() {
   [[ -n "$version" ]] && { printf '%s' "$version"; return 0; }
   if [[ "$mode" == "fast" ]]; then
     dl_warn "无法快速获取最新版本。"
-    dl_info "可直接选择“更新到最新版本”，或设置 LEIKWAN_TARGET_VERSION=1.4.9 后重试。"
+    dl_info "可直接选择“更新到最新版本”，或设置 LEIKWAN_TARGET_VERSION=1.4.10 后重试。"
     dl_info "如需完整探测，可设置 LEIKWAN_GITHUB_METADATA_MODE=full。"
   else
     dl_warn "无法获取最新版本。"
-    dl_info "可设置 LEIKWAN_TARGET_VERSION=1.4.9 后重试，或检查网络 / 镜像配置。"
+    dl_info "可设置 LEIKWAN_TARGET_VERSION=1.4.10 后重试，或检查网络 / 镜像配置。"
   fi
   return 1
 }
@@ -2651,7 +2651,7 @@ update_check() {
   latest_version="$(get_latest_release_version)" || return 1
   if [[ -z "$latest_version" ]]; then
     warn "无法快速获取最新版本。"
-    info "可直接选择“更新到最新版本”，或设置 LEIKWAN_TARGET_VERSION=1.4.9 后重试。"
+    info "可直接选择“更新到最新版本”，或设置 LEIKWAN_TARGET_VERSION=1.4.10 后重试。"
     info "如需完整探测，可设置 LEIKWAN_GITHUB_METADATA_MODE=full。"
     return 1
   fi
@@ -2773,12 +2773,12 @@ update_run() {
       [[ -n "$latest_version" ]] || { fail "LEIKWAN_TARGET_VERSION 无效：${LEIKWAN_TARGET_VERSION}"; exit 1; }
       tag="v${latest_version}"
     else
-      latest="$(update_latest_release)" || { dl_error "无法确定最新版本，已取消更新。"; dl_info "可设置 LEIKWAN_TARGET_VERSION=1.4.9 后重试。"; exit 1; }
+      latest="$(update_latest_release)" || { dl_error "无法确定最新版本，已取消更新。"; dl_info "可设置 LEIKWAN_TARGET_VERSION=1.4.10 后重试。"; exit 1; }
       IFS=$'\t' read -r tag latest_version <<<"$latest"
     fi
     if [[ -z "${latest_version:-}" ]] || ! release_version_from_tag "$latest_version" >/dev/null 2>&1; then
       dl_error "无法确定最新版本，已取消更新。"
-      dl_info "可设置 LEIKWAN_TARGET_VERSION=1.4.9 后重试。"
+      dl_info "可设置 LEIKWAN_TARGET_VERSION=1.4.10 后重试。"
       exit 1
     fi
     if [[ -z "${tag:-}" ]] || ! release_version_from_tag "$tag" >/dev/null 2>&1; then
@@ -12109,16 +12109,75 @@ resolv_conf_type() {
   fi
 }
 
+csv_has_item() {
+  local csv="$1" needle="$2" item
+  local -a dns_items
+  IFS=',' read -r -a dns_items <<<"$csv"
+  for item in "${dns_items[@]}"; do
+    [[ "$item" == "$needle" ]] && return 0
+  done
+  return 1
+}
+
+system_dns_conf_value_csv() {
+  local key="$1" file="${2:-$DNS_RESOLVED_CONF}"
+  [[ -f "$file" ]] || return 1
+  awk -F= -v key="$key" '
+    {
+      k=$1
+      gsub(/^[[:space:]]+|[[:space:]]+$/, "", k)
+      if (k == key) {
+        v=$2
+        for (i=3; i<=NF; i++) v=v "=" $i
+        gsub(/^[[:space:]]+|[[:space:]]+$/, "", v)
+        gsub(/[[:space:]]+/, ",", v)
+        print v
+        exit
+      }
+    }
+  ' "$file" 2>/dev/null
+}
+
+system_dns_resolv_conf_csv() {
+  [[ -f "$SYSTEM_RESOLV_CONF" && ! -L "$SYSTEM_RESOLV_CONF" ]] || return 1
+  awk '$1=="nameserver" && $2 ~ /^[0-9.]+$/ {if (out=="") out=$2; else out=out "," $2} END{print out}' "$SYSTEM_RESOLV_CONF" 2>/dev/null
+}
+
+system_dns_resolvectl_csv() {
+  command -v resolvectl >/dev/null 2>&1 || return 1
+  resolvectl dns 2>/dev/null | awk '
+    {
+      for (i=2; i<=NF; i++) {
+        if ($i ~ /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$/) {
+          if (out=="") out=$i; else out=out "," $i
+        }
+      }
+    }
+    END{print out}
+  '
+}
+
 system_dns_current_csv() {
-  local state line
+  local line state
   state="$(systemd_resolved_state)"
-  if [[ "$state" == "active" && -f "$DNS_RESOLVED_CONF" ]]; then
-    line="$(awk -F= '/^[[:space:]]*DNS[[:space:]]*=/{gsub(/^[[:space:]]+|[[:space:]]+$/, "", $2); gsub(/[[:space:]]+/, ",", $2); print $2; exit}' "$DNS_RESOLVED_CONF" 2>/dev/null || true)"
+  if [[ -f "$DNS_RESOLVED_CONF" ]]; then
+    line="$(system_dns_conf_value_csv DNS "$DNS_RESOLVED_CONF" || true)"
     [[ -n "$line" ]] && { printf '%s' "$line"; return 0; }
   fi
-  if [[ -f "$SYSTEM_RESOLV_CONF" && ! -L "$SYSTEM_RESOLV_CONF" ]]; then
-    awk '$1=="nameserver" && $2 ~ /^[0-9.]+$/ {if (out=="") out=$2; else out=out "," $2} END{print out}' "$SYSTEM_RESOLV_CONF" 2>/dev/null
-    return 0
+  if [[ "$state" == "active" ]]; then
+    line="$(system_dns_resolvectl_csv || true)"
+    [[ -n "$line" ]] && { printf '%s' "$line"; return 0; }
+  fi
+  line="$(system_dns_resolv_conf_csv || true)"
+  [[ -n "$line" ]] && { printf '%s' "$line"; return 0; }
+  printf '-'
+}
+
+system_dns_fallback_csv() {
+  local line
+  if [[ -f "$DNS_RESOLVED_CONF" ]]; then
+    line="$(system_dns_conf_value_csv FallbackDNS "$DNS_RESOLVED_CONF" || true)"
+    [[ -n "$line" ]] && { printf '%s' "$line"; return 0; }
   fi
   printf '-'
 }
@@ -12134,11 +12193,25 @@ system_dns_config_state() {
 }
 
 system_dns_is_target() {
-  [[ "$(system_dns_current_csv)" == "$SYSTEM_DNS_TARGET_CSV" ]]
+  local current fallback state
+  [[ "$(system_dns_config_state)" == "managed" ]] || return 1
+  current="$(system_dns_current_csv)"
+  fallback="$(system_dns_fallback_csv)"
+  state="$(systemd_resolved_state)"
+  [[ "$current" == "$SYSTEM_DNS_TARGET_CSV" ]] || return 1
+  [[ "$state" != "active" || "$fallback" == "${SYSTEM_DNS_FALLBACK_SPACE// /,}" || "$fallback" == "-" ]]
+}
+
+system_dns_is_recommended() {
+  local current
+  [[ "$(system_dns_config_state)" == "managed" ]] || return 1
+  current="$(system_dns_current_csv)"
+  csv_has_item "$current" "8.8.8.8" && csv_has_item "$current" "1.1.1.1"
 }
 
 system_dns_status() {
   echo "系统 DNS: $(system_dns_current_csv)"
+  echo "Fallback DNS: $(system_dns_fallback_csv)"
   echo "systemd-resolved: $(systemd_resolved_state)"
   echo "resolv.conf: $(resolv_conf_type)"
   echo "DNS 配置: $(system_dns_config_state)"
@@ -12149,7 +12222,7 @@ system_dns_set() {
   local dns_csv="${1:-$SYSTEM_DNS_TARGET_CSV}" state content
   dns_csv="${dns_csv//[[:space:]]/}"
   system_dns_validate_csv "$dns_csv" || { fail "系统 DNS 格式无效：${dns_csv}"; return 1; }
-  if system_dns_is_target; then
+  if system_dns_is_recommended; then
     ok "系统 DNS 已是目标配置。"
     return 0
   fi

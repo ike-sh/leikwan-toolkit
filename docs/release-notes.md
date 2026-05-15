@@ -1,5 +1,11 @@
 # Release Notes
 
+## 1.4.10 LTS
+
+- 修复 systemd-resolved 托管 DNS 状态把主 DNS 和 FallbackDNS 混在一起展示的问题。
+- 修复 `doctor` 对系统 DNS 的误判：托管配置中主 DNS 包含 `8.8.8.8` 和 `1.1.1.1` 时输出 OK，FallbackDNS 不再触发“非推荐国外 DNS”提示。
+- 保持 `lq system network prepare` 幂等：目标 DNS 与 FallbackDNS 已写入时不重复改写。
+
 ## 1.4.9 LTS
 
 - 快速组网在 B 利群主机初始化和 A 公网入口部署前自动执行系统网络预处理：IPv4 优先 + `8.8.8.8` / `1.1.1.1` 系统 DNS。

@@ -31,11 +31,15 @@ run_cli() {
   bash "$ROOT_DIR/leikwan-toolkit.sh" --dry-run "$@" >/dev/null
 }
 
+status_out="$(bash "$ROOT_DIR/leikwan-toolkit.sh" --dry-run system network status)"
+grep -q "Fallback DNS:" <<<"$status_out"
 run_cli system network status
 run_cli system network prepare
 run_cli system ipv4-prefer status
 run_cli system ipv4-prefer enable
 run_cli system ipv4-prefer disable
+dns_status_out="$(bash "$ROOT_DIR/leikwan-toolkit.sh" --dry-run system dns status)"
+grep -q "Fallback DNS:" <<<"$dns_status_out"
 run_cli system dns status
 run_cli system dns set 8.8.8.8,1.1.1.1
 run_cli system dns restore

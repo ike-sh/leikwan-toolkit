@@ -44,8 +44,17 @@ grep -q "FallbackDNS=8.8.4.4 1.0.0.1" "$LEIKWAN_RESOLVED_CONF"
 
 status_out="$(system_dns_status)"
 grep -q "系统 DNS: 8.8.8.8,1.1.1.1" <<<"$status_out"
+grep -q "Fallback DNS: 8.8.4.4,1.0.0.1" <<<"$status_out"
 grep -q "systemd-resolved: active" <<<"$status_out"
 grep -q "DNS 配置: managed" <<<"$status_out"
+system_dns_is_recommended
+system_dns_is_target
+
+before_hash="$(sha256sum "$LEIKWAN_RESOLVED_CONF" | awk '{print $1}')"
+idempotent_out="$(system_dns_set_default_foreign 2>&1)"
+after_hash="$(sha256sum "$LEIKWAN_RESOLVED_CONF" | awk '{print $1}')"
+grep -q "系统 DNS 已是目标配置" <<<"$idempotent_out"
+[[ "$before_hash" == "$after_hash" ]] || { echo "FAIL: DNS managed config changed on idempotent set" >&2; exit 1; }
 
 system_dns_restore >/dev/null
 [[ ! -f "$LEIKWAN_RESOLVED_CONF" ]] || { echo "FAIL: resolved drop-in was not removed" >&2; exit 1; }

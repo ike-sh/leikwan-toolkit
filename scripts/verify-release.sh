@@ -53,6 +53,9 @@ bash tests/ipv4-prefer-regression.sh
 section "DNS config regression"
 bash tests/dns-config-regression.sh
 
+section "doctor system DNS regression"
+bash tests/doctor-system-dns-regression.sh
+
 section "IPv6 disable / restore regression"
 bash tests/ipv6-disable-restore-regression.sh
 
