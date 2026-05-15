@@ -69,7 +69,7 @@ curl() {
   case "${SCENARIO:-version}" in
     version)
       if [[ "$url" == *"/VERSION" ]]; then
-        printf '1.4.10\n' >"$output"
+        printf '1.4.11\n' >"$output"
         return 0
       fi
       ;;
@@ -79,7 +79,7 @@ curl() {
         return 0
       fi
       if [[ "$url" == "https://api.github.com/repos/ike-sh/leikwan-toolkit/releases/latest" && "$effective" == 0 ]]; then
-        printf '{"tag_name":"v1.4.10"}\n' >"$output"
+        printf '{"tag_name":"v1.4.11"}\n' >"$output"
         return 0
       fi
       ;;
@@ -93,7 +93,7 @@ curl() {
         return 0
       fi
       if [[ "$url" == "https://github.com/ike-sh/leikwan-toolkit/releases/latest" && "$effective" == 1 ]]; then
-        printf 'https://github.com/ike-sh/leikwan-toolkit/releases/tag/v1.4.10'
+        printf 'https://github.com/ike-sh/leikwan-toolkit/releases/tag/v1.4.11'
         return 0
       fi
       ;;
@@ -110,7 +110,7 @@ curl() {
         return 0
       fi
       if [[ "$url" == "https://api.github.com/repos/ike-sh/leikwan-toolkit/tags" && "$effective" == 0 ]]; then
-        printf '[{"name":"v1.4.6"},{"name":"v1.4.10"},{"name":"v1.4.7"},{"name":"not-semver"}]\n' >"$output"
+        printf '[{"name":"v1.4.6"},{"name":"v1.4.11"},{"name":"v1.4.7"},{"name":"not-semver"}]\n' >"$output"
         return 0
       fi
       ;;
@@ -124,13 +124,13 @@ curl() {
 SCENARIO=version
 : >"$attempts"
 : >"$args_log"
-[[ "$(get_latest_release_version)" == "1.4.10" ]]
+[[ "$(get_latest_release_version)" == "1.4.11" ]]
 grep -q '/VERSION' "$attempts"
 ! grep -q 'api.github.com' "$attempts"
 
 SCENARIO=api
 : >"$attempts"
-[[ "$(get_latest_release_version)" == "1.4.10" ]]
+[[ "$(get_latest_release_version)" == "1.4.11" ]]
 first_api="$(grep 'api.github.com' "$attempts" | sed -n '1p')"
 [[ "$first_api" == "https://api.github.com/repos/ike-sh/leikwan-toolkit/releases/latest" ]]
 api_host_pattern='api.github.com'
@@ -143,12 +143,12 @@ fi
 
 SCENARIO=redirect
 : >"$attempts"
-[[ "$(get_latest_release_version)" == "1.4.10" ]]
+[[ "$(get_latest_release_version)" == "1.4.11" ]]
 grep -q 'https://github.com/ike-sh/leikwan-toolkit/releases/latest' "$attempts"
 
 SCENARIO=tags
 : >"$attempts"
-[[ "$(get_latest_release_version)" == "1.4.10" ]]
+[[ "$(get_latest_release_version)" == "1.4.11" ]]
 
 SCENARIO=fail
 out="$(update_check 2>&1 || true)"

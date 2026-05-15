@@ -22,7 +22,7 @@ export LEIKWAN_IPV6_DISABLE_CONF="${TMP_DIR}/sysctl.d/99-leikwan-disable-ipv6.co
 export LEIKWAN_PROC_IPV6_CONF_DIR="${TMP_DIR}/proc/sys/net/ipv6/conf"
 export LEIKWAN_IPV6_NFT_SERVICE="${TMP_DIR}/leikwan-ipv6-lockdown.service"
 mkdir -p "$LEIKWAN_RUN_DIR" "$LEIKWAN_PROC_IPV6_CONF_DIR"/{all,default,lo}
-printf 'nameserver 9.9.9.9\n' >"$LEIKWAN_RESOLV_CONF"
+printf 'nameserver 4.4.4.4\n' >"$LEIKWAN_RESOLV_CONF"
 printf '0\n' >"$LEIKWAN_PROC_IPV6_CONF_DIR/all/disable_ipv6"
 printf '0\n' >"$LEIKWAN_PROC_IPV6_CONF_DIR/default/disable_ipv6"
 printf '0\n' >"$LEIKWAN_PROC_IPV6_CONF_DIR/lo/disable_ipv6"

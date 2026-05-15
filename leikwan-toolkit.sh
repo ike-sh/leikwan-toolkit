@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-TOOL_VERSION="1.4.10"
+TOOL_VERSION="1.4.11"
 RELEASE_CHANNEL="LTS"
 PROJECT_NAME="leikwan-toolkit"
 PROJECT_TITLE="利群快速组网工具"
@@ -196,8 +196,11 @@ ENTRY_DDNS_INTERVAL_DEFAULT="5min"
 ENTRY_DDNS_IP_SOURCE_DEFAULT="auto"
 
 BBR_SYSCTL_CONF="/etc/sysctl.d/99-leikwan-bbr.conf"
-SYSTEM_DNS_TARGET_CSV="${LEIKWAN_SYSTEM_DNS:-8.8.8.8,1.1.1.1}"
-SYSTEM_DNS_FALLBACK_SPACE="${LEIKWAN_SYSTEM_FALLBACK_DNS:-8.8.4.4 1.0.0.1}"
+LEIKWAN_SYSTEM_DNS_PRIMARY="${LEIKWAN_SYSTEM_DNS_PRIMARY:-8.8.8.8 1.1.1.1}"
+LEIKWAN_SYSTEM_DNS_FALLBACK="${LEIKWAN_SYSTEM_DNS_FALLBACK:-8.8.4.4 1.0.0.1}"
+SYSTEM_DNS_TARGET_CSV="${LEIKWAN_SYSTEM_DNS:-${LEIKWAN_SYSTEM_DNS_PRIMARY// /,}}"
+SYSTEM_DNS_FALLBACK_SPACE="$LEIKWAN_SYSTEM_DNS_FALLBACK"
+SYSTEM_DNS_FALLBACK_CSV="${LEIKWAN_SYSTEM_DNS_FALLBACK// /,}"
 SYSTEM_GAI_CONF="${LEIKWAN_GAI_CONF:-/etc/gai.conf}"
 SYSTEM_RESOLV_CONF="${LEIKWAN_RESOLV_CONF:-/etc/resolv.conf}"
 DNS_RESOLVED_CONF="${LEIKWAN_RESOLVED_CONF:-/etc/systemd/resolved.conf.d/99-leikwan-dns.conf}"
@@ -2426,11 +2429,11 @@ get_latest_release_version() {
   [[ -n "$version" ]] && { printf '%s' "$version"; return 0; }
   if [[ "$mode" == "fast" ]]; then
     dl_warn "无法快速获取最新版本。"
-    dl_info "可直接选择“更新到最新版本”，或设置 LEIKWAN_TARGET_VERSION=1.4.10 后重试。"
+    dl_info "可直接选择“更新到最新版本”，或设置 LEIKWAN_TARGET_VERSION=1.4.11 后重试。"
     dl_info "如需完整探测，可设置 LEIKWAN_GITHUB_METADATA_MODE=full。"
   else
     dl_warn "无法获取最新版本。"
-    dl_info "可设置 LEIKWAN_TARGET_VERSION=1.4.10 后重试，或检查网络 / 镜像配置。"
+    dl_info "可设置 LEIKWAN_TARGET_VERSION=1.4.11 后重试，或检查网络 / 镜像配置。"
   fi
   return 1
 }
@@ -2651,7 +2654,7 @@ update_check() {
   latest_version="$(get_latest_release_version)" || return 1
   if [[ -z "$latest_version" ]]; then
     warn "无法快速获取最新版本。"
-    info "可直接选择“更新到最新版本”，或设置 LEIKWAN_TARGET_VERSION=1.4.10 后重试。"
+    info "可直接选择“更新到最新版本”，或设置 LEIKWAN_TARGET_VERSION=1.4.11 后重试。"
     info "如需完整探测，可设置 LEIKWAN_GITHUB_METADATA_MODE=full。"
     return 1
   fi
@@ -2773,12 +2776,12 @@ update_run() {
       [[ -n "$latest_version" ]] || { fail "LEIKWAN_TARGET_VERSION 无效：${LEIKWAN_TARGET_VERSION}"; exit 1; }
       tag="v${latest_version}"
     else
-      latest="$(update_latest_release)" || { dl_error "无法确定最新版本，已取消更新。"; dl_info "可设置 LEIKWAN_TARGET_VERSION=1.4.10 后重试。"; exit 1; }
+      latest="$(update_latest_release)" || { dl_error "无法确定最新版本，已取消更新。"; dl_info "可设置 LEIKWAN_TARGET_VERSION=1.4.11 后重试。"; exit 1; }
       IFS=$'\t' read -r tag latest_version <<<"$latest"
     fi
     if [[ -z "${latest_version:-}" ]] || ! release_version_from_tag "$latest_version" >/dev/null 2>&1; then
       dl_error "无法确定最新版本，已取消更新。"
-      dl_info "可设置 LEIKWAN_TARGET_VERSION=1.4.10 后重试。"
+      dl_info "可设置 LEIKWAN_TARGET_VERSION=1.4.11 后重试。"
       exit 1
     fi
     if [[ -z "${tag:-}" ]] || ! release_version_from_tag "$tag" >/dev/null 2>&1; then
@@ -10780,11 +10783,11 @@ doctor() {
   else
     report WARN "IPv4 优先未启用，建议执行：lq system network prepare"
   fi
-  if system_dns_is_target; then
-    report OK "系统 DNS 已使用 Leikwan 推荐国外 DNS"
-  else
-    report INFO "当前系统 DNS 非 Leikwan 推荐国外 DNS，建议执行：lq system network prepare"
-  fi
+  case "$(system_dns_doctor_state)" in
+    ok) report OK "系统 DNS 已使用 Leikwan 推荐国外 DNS" ;;
+    legacy) report WARN "检测到旧版 Leikwan DNS 配置，建议执行：lq system network prepare" ;;
+    *) report INFO "当前系统 DNS 非 Leikwan 推荐国外 DNS，建议执行：lq system network prepare" ;;
+  esac
   dnsutils_auto_install "doctor" "false" "plain" || true
   doctor_dependency_tools
   doctor_fake_ip_dns
@@ -12070,7 +12073,14 @@ system_dns_validate_csv() {
 system_dns_csv_to_space() {
   local csv="$1"
   csv="${csv//,/ }"
-  printf '%s' "$csv"
+  awk '{$1=$1; print}' <<<"$csv"
+}
+
+system_dns_space_to_csv() {
+  local value="$1"
+  value="$(system_dns_csv_to_space "$value")"
+  value="${value// /,}"
+  printf '%s' "$value"
 }
 
 system_dns_resolved_content() {
@@ -12079,7 +12089,7 @@ system_dns_resolved_content() {
   cat <<EOF
 [Resolve]
 DNS=${dns_space}
-FallbackDNS=${SYSTEM_DNS_FALLBACK_SPACE}
+FallbackDNS=${LEIKWAN_SYSTEM_DNS_FALLBACK}
 LLMNR=no
 MulticastDNS=no
 EOF
@@ -12183,48 +12193,84 @@ system_dns_fallback_csv() {
 }
 
 system_dns_config_state() {
+  system_dns_managed_state
+}
+
+system_dns_managed_state() {
+  local current fallback
   if [[ -f "$DNS_RESOLVED_CONF" ]]; then
-    printf 'managed'
+    current="$(system_dns_conf_value_csv DNS "$DNS_RESOLVED_CONF" || true)"
+    fallback="$(system_dns_conf_value_csv FallbackDNS "$DNS_RESOLVED_CONF" || true)"
+    if [[ "$current" == "$SYSTEM_DNS_TARGET_CSV" && "$fallback" == "$SYSTEM_DNS_FALLBACK_CSV" ]]; then
+      printf 'managed-current'
+    else
+      printf 'managed-legacy'
+    fi
   elif [[ -f "$SYSTEM_RESOLV_CONF" && ! -L "$SYSTEM_RESOLV_CONF" ]] && grep -q '^# Managed by leikwan-toolkit system DNS$' "$SYSTEM_RESOLV_CONF" 2>/dev/null; then
-    printf 'managed'
+    current="$(system_dns_resolv_conf_csv || true)"
+    if [[ "$current" == "$SYSTEM_DNS_TARGET_CSV" ]]; then
+      printf 'managed-current'
+    else
+      printf 'managed-legacy'
+    fi
   else
     printf 'unmanaged'
   fi
 }
 
 system_dns_is_target() {
-  local current fallback state
-  [[ "$(system_dns_config_state)" == "managed" ]] || return 1
-  current="$(system_dns_current_csv)"
-  fallback="$(system_dns_fallback_csv)"
-  state="$(systemd_resolved_state)"
-  [[ "$current" == "$SYSTEM_DNS_TARGET_CSV" ]] || return 1
-  [[ "$state" != "active" || "$fallback" == "${SYSTEM_DNS_FALLBACK_SPACE// /,}" || "$fallback" == "-" ]]
+  [[ "$(system_dns_managed_state)" == "managed-current" ]]
 }
 
 system_dns_is_recommended() {
-  local current
-  [[ "$(system_dns_config_state)" == "managed" ]] || return 1
+  local current managed_state
+  managed_state="$(system_dns_managed_state)"
+  [[ "$managed_state" == "managed-legacy" ]] && return 1
   current="$(system_dns_current_csv)"
   csv_has_item "$current" "8.8.8.8" && csv_has_item "$current" "1.1.1.1"
 }
 
+system_dns_doctor_state() {
+  local managed_state
+  managed_state="$(system_dns_managed_state)"
+  case "$managed_state" in
+    managed-current) printf 'ok' ;;
+    managed-legacy) printf 'legacy' ;;
+    *)
+      if system_dns_is_recommended; then
+        printf 'ok'
+      else
+        printf 'missing'
+      fi
+      ;;
+  esac
+}
+
 system_dns_status() {
+  local managed_state
+  managed_state="$(system_dns_managed_state)"
   echo "系统 DNS: $(system_dns_current_csv)"
   echo "Fallback DNS: $(system_dns_fallback_csv)"
   echo "systemd-resolved: $(systemd_resolved_state)"
   echo "resolv.conf: $(resolv_conf_type)"
-  echo "DNS 配置: $(system_dns_config_state)"
+  echo "DNS 配置: ${managed_state}"
+  if [[ "$managed_state" == "managed-legacy" ]]; then
+    warn "检测到旧版 Leikwan DNS 配置，建议执行：lq system network prepare"
+  fi
 }
 
 system_dns_set() {
   need_root_unless_dry_run
-  local dns_csv="${1:-$SYSTEM_DNS_TARGET_CSV}" state content
+  local dns_csv="${1:-$SYSTEM_DNS_TARGET_CSV}" state content managed_state
   dns_csv="${dns_csv//[[:space:]]/}"
   system_dns_validate_csv "$dns_csv" || { fail "系统 DNS 格式无效：${dns_csv}"; return 1; }
-  if system_dns_is_recommended; then
+  managed_state="$(system_dns_managed_state)"
+  if [[ "$dns_csv" == "$SYSTEM_DNS_TARGET_CSV" && "$managed_state" == "managed-current" ]]; then
     ok "系统 DNS 已是目标配置。"
     return 0
+  fi
+  if [[ "$managed_state" == "managed-legacy" ]]; then
+    warn "检测到旧版 Leikwan DNS 配置，正在迁移到当前目标配置。"
   fi
   state="$(systemd_resolved_state)"
   case "$state" in
@@ -12235,7 +12281,11 @@ system_dns_set() {
       else
         systemctl restart systemd-resolved 2>/dev/null || warn "systemd-resolved 重启失败，请稍后手动检查系统 DNS。"
       fi
-      ok "已设置系统 DNS：${dns_csv}"
+      if [[ "$managed_state" == "managed-legacy" ]]; then
+        ok "系统 DNS 已更新为目标配置。"
+      else
+        ok "系统 DNS 配置已写入。"
+      fi
       ;;
     inactive|missing)
       if [[ -L "$SYSTEM_RESOLV_CONF" ]]; then
@@ -12247,7 +12297,11 @@ system_dns_set() {
         [[ -n "$ip" ]] && content="${content}"$'\n'"nameserver ${ip}"
       done < <(tr ',' '\n' <<<"$dns_csv")
       write_file "$SYSTEM_RESOLV_CONF" "$content" 644 || return 1
-      ok "已设置系统 DNS：${dns_csv}"
+      if [[ "$managed_state" == "managed-legacy" ]]; then
+        ok "系统 DNS 已更新为目标配置。"
+      else
+        ok "系统 DNS 配置已写入。"
+      fi
       ;;
   esac
 }

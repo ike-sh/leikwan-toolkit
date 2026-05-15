@@ -75,4 +75,22 @@ fi
 grep -q "DNS=8.8.8.8 1.1.1.1" "$LEIKWAN_RESOLVED_CONF"
 grep -q "FallbackDNS=8.8.4.4 1.0.0.1" "$LEIKWAN_RESOLVED_CONF"
 
+cat >"$LEIKWAN_RESOLVED_CONF" <<'EOF'
+[Resolve]
+DNS=8.8.8.8 1.1.1.1 8.8.4.4
+FallbackDNS=9.9.9.9 223.5.5.5
+LLMNR=no
+MulticastDNS=no
+EOF
+
+legacy_status="$(system_dns_status 2>&1)"
+grep -q "DNS 配置: managed-legacy" <<<"$legacy_status"
+legacy_doctor_out="$(doctor 2>&1 || true)"
+grep -q "检测到旧版 Leikwan DNS 配置" <<<"$legacy_doctor_out"
+if grep -q "当前系统 DNS 非 Leikwan 推荐国外 DNS" <<<"$legacy_doctor_out"; then
+  echo "FAIL: doctor should report legacy managed DNS instead of generic non-target DNS" >&2
+  echo "$legacy_doctor_out" >&2
+  exit 1
+fi
+
 echo "[OK] doctor system DNS regression passed"

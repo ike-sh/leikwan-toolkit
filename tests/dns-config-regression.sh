@@ -18,7 +18,8 @@ export LEIKWAN_NO_CLEAR=1
 export LEIKWAN_RESOLVED_CONF="${TMP_DIR}/resolved.conf.d/99-leikwan-dns.conf"
 export LEIKWAN_RESOLV_CONF="${TMP_DIR}/resolv.conf"
 mkdir -p "$LEIKWAN_RUN_DIR"
-printf 'nameserver 9.9.9.9\n' >"$LEIKWAN_RESOLV_CONF"
+mkdir -p "$(dirname "$LEIKWAN_RESOLVED_CONF")"
+printf 'nameserver 4.4.4.4\n' >"$LEIKWAN_RESOLV_CONF"
 
 # shellcheck source=/dev/null
 source "$ROOT_DIR/leikwan-toolkit.sh"
@@ -37,30 +38,51 @@ systemctl() {
   esac
 }
 
-system_dns_set_default_foreign >/dev/null
+cat >"$LEIKWAN_RESOLVED_CONF" <<'EOF'
+[Resolve]
+DNS=8.8.8.8 1.1.1.1 8.8.4.4
+FallbackDNS=9.9.9.9 223.5.5.5
+LLMNR=no
+MulticastDNS=no
+EOF
+
+legacy_status="$(system_dns_status 2>&1)"
+grep -q "DNS 配置: managed-legacy" <<<"$legacy_status"
+grep -q "系统 DNS: 8.8.8.8,1.1.1.1,8.8.4.4" <<<"$legacy_status"
+grep -q "Fallback DNS: 9.9.9.9,223.5.5.5" <<<"$legacy_status"
+
+migrate_out="$(system_dns_set_default_foreign 2>&1)"
+grep -q "旧版 Leikwan DNS 配置" <<<"$migrate_out"
+grep -q "系统 DNS 已更新为目标配置" <<<"$migrate_out"
 grep -q "DNS=8.8.8.8 1.1.1.1" "$LEIKWAN_RESOLVED_CONF"
 grep -q "FallbackDNS=8.8.4.4 1.0.0.1" "$LEIKWAN_RESOLVED_CONF"
-[[ -n "$(find "$LEIKWAN_BACKUP_DIR" -type f -name '*resolv.conf*.bak' -o -name '*99-leikwan-dns.conf*.bak' 2>/dev/null || true)" ]] || true
+[[ -n "$(find "$LEIKWAN_BACKUP_DIR" -type f -name '*99-leikwan-dns.conf*.bak' 2>/dev/null || true)" ]] || {
+  echo "FAIL: legacy managed DNS was not backed up" >&2
+  exit 1
+}
 
 status_out="$(system_dns_status)"
 grep -q "系统 DNS: 8.8.8.8,1.1.1.1" <<<"$status_out"
 grep -q "Fallback DNS: 8.8.4.4,1.0.0.1" <<<"$status_out"
 grep -q "systemd-resolved: active" <<<"$status_out"
-grep -q "DNS 配置: managed" <<<"$status_out"
+grep -q "DNS 配置: managed-current" <<<"$status_out"
 system_dns_is_recommended
 system_dns_is_target
 
 before_hash="$(sha256sum "$LEIKWAN_RESOLVED_CONF" | awk '{print $1}')"
+before_backup_count="$(find "$LEIKWAN_BACKUP_DIR" -type f -name '*.bak' 2>/dev/null | wc -l | awk '{print $1}')"
 idempotent_out="$(system_dns_set_default_foreign 2>&1)"
 after_hash="$(sha256sum "$LEIKWAN_RESOLVED_CONF" | awk '{print $1}')"
+after_backup_count="$(find "$LEIKWAN_BACKUP_DIR" -type f -name '*.bak' 2>/dev/null | wc -l | awk '{print $1}')"
 grep -q "系统 DNS 已是目标配置" <<<"$idempotent_out"
 [[ "$before_hash" == "$after_hash" ]] || { echo "FAIL: DNS managed config changed on idempotent set" >&2; exit 1; }
+[[ "$before_backup_count" == "$after_backup_count" ]] || { echo "FAIL: idempotent DNS set created a backup" >&2; exit 1; }
 
 system_dns_restore >/dev/null
 [[ ! -f "$LEIKWAN_RESOLVED_CONF" ]] || { echo "FAIL: resolved drop-in was not removed" >&2; exit 1; }
 
 SYSTEMD_STATE="missing"
-printf 'nameserver 9.9.9.9\n' >"$LEIKWAN_RESOLV_CONF"
+printf 'nameserver 4.4.4.4\n' >"$LEIKWAN_RESOLV_CONF"
 system_dns_set_default_foreign >/dev/null
 grep -q "# Managed by leikwan-toolkit system DNS" "$LEIKWAN_RESOLV_CONF"
 grep -q "nameserver 8.8.8.8" "$LEIKWAN_RESOLV_CONF"

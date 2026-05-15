@@ -18,7 +18,7 @@ export LEIKWAN_NO_CLEAR=1
 export LEIKWAN_GAI_CONF="${TMP_DIR}/gai.conf"
 export LEIKWAN_RESOLV_CONF="${TMP_DIR}/resolv.conf"
 mkdir -p "$LEIKWAN_RUN_DIR"
-printf 'nameserver 9.9.9.9\n' >"$LEIKWAN_RESOLV_CONF"
+printf 'nameserver 4.4.4.4\n' >"$LEIKWAN_RESOLV_CONF"
 
 # shellcheck source=/dev/null
 source "$ROOT_DIR/leikwan-toolkit.sh"
@@ -29,7 +29,7 @@ systemctl() { return 1; }
 out="$(system_network_prepare 2>&1)"
 grep -q "正在执行系统网络预处理：IPv4 优先 + 国外 DNS" <<<"$out"
 grep -q "已开启 IPv4 优先" <<<"$out"
-grep -q "已设置系统 DNS：8.8.8.8,1.1.1.1" <<<"$out"
+grep -Eq "系统 DNS (配置已写入|已更新为目标配置|已是目标配置)" <<<"$out"
 
 declare -f quick_generate_network_pairing | grep -q "system_network_prepare"
 declare -f quick_deploy_entry_from_network_pairing | grep -q "system_network_prepare"

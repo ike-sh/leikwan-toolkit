@@ -1,5 +1,11 @@
 # Release Notes
 
+## 1.4.11 LTS
+
+- 修复 `lq system network prepare` 对旧版 Leikwan 托管 DNS 的误判：只有主 DNS 和 FallbackDNS 都精确等于当前目标配置时才算 `managed-current`。
+- 新增 DNS 配置状态 `managed-current` / `managed-legacy` / `unmanaged`，旧托管配置会提示并自动迁移。
+- `doctor` 使用同一套 DNS 状态判断，旧托管配置提示迁移，未托管但主 DNS 包含 `8.8.8.8` / `1.1.1.1` 时仍认可为推荐 DNS。
+
 ## 1.4.10 LTS
 
 - 修复 systemd-resolved 托管 DNS 状态把主 DNS 和 FallbackDNS 混在一起展示的问题。
