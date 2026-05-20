@@ -150,4 +150,4 @@ sudo lq pbr apply
 sudo lq forward apply-relay --auto-fix-route
 ```
 
-从现有转发目标添加 PBR 后，脚本会默认询问是否立即重新应用利群转发规则并同步 `route_table`，等价于执行 `lq forward apply-relay --auto-fix-route`。选择稍后应用时，PBR 会保留，但转发目标元数据需要在维护窗口手动同步。
+从现有转发目标添加 PBR 后，脚本会默认询问是否立即重新应用转发规则并同步 `route_table`，等价于执行 `lq forward apply-relay --auto-fix-route`。选择稍后应用时，PBR 会保留，但转发目标元数据需要在维护窗口手动同步。

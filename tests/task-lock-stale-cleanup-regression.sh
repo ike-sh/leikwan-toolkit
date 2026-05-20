@@ -9,11 +9,11 @@ source "$ROOT_DIR/tests/test-lib.sh"
 
 TMP_DIR="$(test_mktemp_dir "$ROOT_DIR")"
 trap 'rm -rf "$TMP_DIR"' EXIT
-
 export LEIKWAN_STATE_DIR="${TMP_DIR}/state"
 export LEIKWAN_BACKUP_DIR="${TMP_DIR}/backups"
 export LEIKWAN_RUN_DIR="${TMP_DIR}/run"
 export LEIKWAN_LOG_DISABLED=1
+export LEIKWAN_NO_CLEAR=1
 mkdir -p "$LEIKWAN_RUN_DIR"
 
 # shellcheck source=/dev/null
@@ -26,7 +26,29 @@ stale_file="${TMP_DIR}/stale.out"
 global_lock_acquire >"$stale_file" 2>&1
 stale_out="$(cat "$stale_file")"
 grep -q "检测到遗留任务锁，已自动清理" <<<"$stale_out"
+[[ -n "$LEIKWAN_GLOBAL_LOCK_TOKEN" ]]
 global_lock_release
+
+printf '%s\n' 999999 >"${LEIKWAN_LOCK_PATH}.pid"
+touch "$LEIKWAN_LOCK_PATH"
+unlock_out="$(task_unlock_stale 2>&1)"
+grep -q "已清理遗留任务锁" <<<"$unlock_out"
+[[ ! -e "$LEIKWAN_LOCK_PATH" ]]
+[[ ! -e "${LEIKWAN_LOCK_PATH}.pid" ]]
+
+printf '%s\n' 999999 >"${LEIKWAN_LOCK_PATH}.pid"
+touch "$LEIKWAN_LOCK_PATH"
+cli_unlock_out="$(
+  LEIKWAN_STATE_DIR="$LEIKWAN_STATE_DIR" \
+  LEIKWAN_BACKUP_DIR="$LEIKWAN_BACKUP_DIR" \
+  LEIKWAN_RUN_DIR="$LEIKWAN_RUN_DIR" \
+  LEIKWAN_LOG_DISABLED=1 \
+  LEIKWAN_NO_CLEAR=1 \
+  bash "$ROOT_DIR/leikwan-toolkit.sh" task unlock-stale 2>&1
+)"
+grep -q "已清理遗留任务锁" <<<"$cli_unlock_out"
+[[ ! -e "$LEIKWAN_LOCK_PATH" ]]
+[[ ! -e "${LEIKWAN_LOCK_PATH}.pid" ]]
 
 holder_log="${TMP_DIR}/holder.log"
 (
@@ -43,26 +65,10 @@ for _ in {1..30}; do
   sleep 0.1
 done
 
-set +e
-busy_out="$(global_lock_acquire 2>&1)"
-busy_rc=$?
-set -e
+live_out="$(task_unlock_stale 2>&1)"
 kill "$holder_pid" 2>/dev/null || true
 wait "$holder_pid" 2>/dev/null || true
 
-if (( busy_rc == 0 )); then
-  global_lock_release
-  echo "FAIL: global lock acquired while holder was active" >&2
-  cat "$holder_log" >&2
-  exit 1
-fi
-grep -q "已有 Leikwan 任务运行中，当前操作已跳过" <<<"$busy_out" || {
-  echo "FAIL: busy lock did not produce friendly warning" >&2
-  echo "$busy_out" >&2
-  cat "$holder_log" >&2
-  exit 1
-}
-grep -q "锁文件：" <<<"$busy_out"
-grep -q "持有进程：PID=" <<<"$busy_out"
+grep -q "锁仍由活进程持有，未删除" <<<"$live_out"
 
-echo "[OK] lock regression passed"
+echo "[OK] task lock stale cleanup regression passed"

@@ -1,5 +1,12 @@
 # Release Notes
 
+## 1.4.16 LTS
+
+- 去掉“转发目标管理”里的重复 apply-relay 入口，保留“利群主机 B -> 重新应用转发规则”作为唯一菜单入口；CLI `lq forward apply-relay` 继续保留。
+- 移除“转发目标管理”里的旧 DDNS 自动刷新编号项，改为非编号说明。
+- 优化全局任务锁冲突提示，显示锁文件、PID、命令、运行时长和日志线索；新增 `lq task status` / `lq task unlock-stale`。
+- 检测到遗留任务锁时自动清理并重试，不会自动 kill 活进程。
+
 ## 1.4.15 LTS
 
 - `lq update` 不带子命令时等价于 `lq update run`，保留 `check` / `run` / `status` / `rollback` 原有行为。

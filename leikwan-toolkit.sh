@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-TOOL_VERSION="1.4.15"
+TOOL_VERSION="1.4.16"
 RELEASE_CHANNEL="LTS"
 PROJECT_NAME="leikwan-toolkit"
 PROJECT_TITLE="利群快速组网工具"
@@ -18,6 +18,7 @@ LOG_DISABLED="${LEIKWAN_LOG_DISABLED:-0}"
 MENU_ACTION_PAUSE_DONE=0
 DOCTOR_INTERACTIVE_FIX=0
 APPLY_NFT_LAST_STATUS=""
+LEIKWAN_LOCK_CONFLICT=0
 REPORT_WARN_COUNT=0
 REPORT_FAIL_COUNT=0
 PORT_CHECK_RESULT="ok"
@@ -490,10 +491,17 @@ pause_after_action() {
 
 run_menu_action_pause() {
   local rc
+  LEIKWAN_LOCK_CONFLICT=0
   set +e
   "$@"
   rc=$?
   set -e
+  if (( rc != 0 && LEIKWAN_LOCK_CONFLICT == 1 )); then
+    info "操作已跳过，当前已有 Leikwan 任务运行。"
+    info "可稍后重试，或执行：lq task status。"
+    LEIKWAN_LOCK_CONFLICT=0
+    rc=0
+  fi
   pause_after_action
   return "$rc"
 }
@@ -915,6 +923,8 @@ ${PROJECT_NAME} $(tool_version_label)
   sudo bash leikwan-toolkit.sh update run
   sudo bash leikwan-toolkit.sh update status
   sudo bash leikwan-toolkit.sh update rollback
+  sudo bash leikwan-toolkit.sh task status
+  sudo bash leikwan-toolkit.sh task unlock-stale
   sudo bash leikwan-toolkit.sh ddns run
   sudo bash leikwan-toolkit.sh ddns run --global
   sudo bash leikwan-toolkit.sh ddns run --scope forwards|entries|pbr|all
@@ -1291,27 +1301,180 @@ pid_is_alive() {
   kill -0 "$pid" 2>/dev/null
 }
 
+process_cmdline() {
+  local pid="$1" cmd=""
+  if [[ -r "/proc/${pid}/cmdline" ]]; then
+    cmd="$(tr '\0' ' ' <"/proc/${pid}/cmdline" 2>/dev/null | sed 's/[[:space:]]*$//')"
+  fi
+  if [[ -z "$cmd" ]] && command -v ps >/dev/null 2>&1; then
+    cmd="$(ps -p "$pid" -o args= 2>/dev/null | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+  fi
+  printf '%s' "${cmd:-未知}"
+}
+
+process_elapsed_seconds() {
+  local pid="$1" elapsed=""
+  if command -v ps >/dev/null 2>&1; then
+    elapsed="$(ps -p "$pid" -o etimes= 2>/dev/null | tr -d '[:space:]')"
+  fi
+  [[ "$elapsed" =~ ^[0-9]+$ ]] || elapsed=""
+  printf '%s' "$elapsed"
+}
+
+format_duration_seconds() {
+  local seconds="${1:-}"
+  [[ "$seconds" =~ ^[0-9]+$ ]] || { printf '%s' "-"; return 0; }
+  if (( seconds < 60 )); then
+    printf '%ss' "$seconds"
+  elif (( seconds < 3600 )); then
+    printf '%sm%ss' "$((seconds / 60))" "$((seconds % 60))"
+  else
+    printf '%sh%sm%ss' "$((seconds / 3600))" "$(((seconds % 3600) / 60))" "$((seconds % 60))"
+  fi
+}
+
+process_is_leikwan_task() {
+  local pid="$1" cmd
+  cmd="$(process_cmdline "$pid")"
+  case "$cmd" in
+    *leikwan-toolkit*|*" lq "*|*/lq*|*bash*|*sh*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+lock_read_pid() {
+  local lock_path="$1" pid=""
+  if [[ -f "${lock_path}.pid" ]]; then
+    pid="$(head -n 1 "${lock_path}.pid" 2>/dev/null || true)"
+  elif [[ -f "${lock_path}.d/pid" ]]; then
+    pid="$(head -n 1 "${lock_path}.d/pid" 2>/dev/null || true)"
+  fi
+  pid="$(normalize_menu_choice "$pid")"
+  printf '%s' "$pid"
+}
+
+lock_files_exist() {
+  local lock_path="$1"
+  [[ -e "$lock_path" || -e "${lock_path}.pid" || -e "${lock_path}.meta" || -d "${lock_path}.d" ]]
+}
+
+lock_is_stale() {
+  local lock_path="$1" pid
+  lock_files_exist "$lock_path" || return 1
+  pid="$(lock_read_pid "$lock_path")"
+  [[ -n "$pid" && "$pid" =~ ^[0-9]+$ ]] || return 0
+  pid_is_alive "$pid" || return 0
+  process_is_leikwan_task "$pid" || return 0
+  return 1
+}
+
+lock_remove_files() {
+  local lock_path="$1"
+  rm -f "$lock_path" "${lock_path}.pid" "${lock_path}.meta" 2>/dev/null || true
+  rm -rf "${lock_path}.d" 2>/dev/null || true
+}
+
+lock_current_command() {
+  local cmd
+  cmd="$(process_cmdline "$$")"
+  [[ "$cmd" != "未知" && -n "$cmd" ]] || cmd="${0:-leikwan-toolkit.sh} $*"
+  printf '%s' "$cmd"
+}
+
+lock_log_hint_for_cmd() {
+  local cmd="$1" label="${2:-}" hints=()
+  case "${cmd} ${label}" in
+    *apply-relay*|*"转发"*|*"PBR"*) hints+=("$APPLY_RELAY_LOG") ;;
+  esac
+  case "${cmd} ${label}" in
+    *ddns*|*"DDNS"*) hints+=("$DDNS_LOG_FILE") ;;
+  esac
+  case "${cmd} ${label}" in
+    *update*|*"更新"*) hints+=("$LOG_FILE") ;;
+  esac
+  case "${cmd} ${label}" in
+    *doctor*|*"诊断"*) hints+=("$LOG_FILE") ;;
+  esac
+  (( ${#hints[@]} > 0 )) || hints+=("$LOG_FILE")
+  local out="" item
+  for item in "${hints[@]}"; do
+    [[ -n "$item" ]] || continue
+    [[ ",${out}," == *",${item},"* ]] && continue
+    out="${out:+${out},}${item}"
+  done
+  printf '%s' "$out"
+}
+
+lock_write_owner_meta() {
+  local lock_path="$1" label="$2" cmd
+  cmd="$(lock_current_command)"
+  {
+    printf 'PID=%s\n' "$$"
+    printf 'LABEL=%s\n' "$label"
+    printf 'STARTED_AT=%s\n' "$(status_now)"
+    printf 'COMMAND=%s\n' "$cmd"
+    printf 'LOG_HINT=%s\n' "$(lock_log_hint_for_cmd "$cmd" "$label")"
+  } >"${lock_path}.meta" 2>/dev/null || true
+}
+
+lock_meta_value() {
+  local lock_path="$1" key="$2"
+  [[ -f "${lock_path}.meta" ]] || return 1
+  awk -F= -v k="$key" '$1==k {sub(/^[^=]*=/, ""); print; exit}' "${lock_path}.meta" 2>/dev/null
+}
+
+lock_owner_command() {
+  local lock_path="$1" pid="$2" cmd
+  cmd="$(lock_meta_value "$lock_path" COMMAND 2>/dev/null || true)"
+  [[ -n "$cmd" ]] || cmd="$(process_cmdline "$pid")"
+  printf '%s' "${cmd:-未知}"
+}
+
+lock_owner_log_hint() {
+  local lock_path="$1" label="${2:-}" cmd="$3" hint
+  hint="$(lock_meta_value "$lock_path" LOG_HINT 2>/dev/null || true)"
+  [[ -n "$hint" ]] || hint="$(lock_log_hint_for_cmd "$cmd" "$label")"
+  printf '%s' "$hint"
+}
+
+lock_owner_inline() {
+  local lock_path="$1" label="${2:-任务}" pid cmd elapsed
+  pid="$(lock_read_pid "$lock_path")"
+  if [[ -z "$pid" ]]; then
+    printf 'PID=未知 command=未知'
+    return 0
+  fi
+  cmd="$(lock_owner_command "$lock_path" "$pid")"
+  elapsed="$(format_duration_seconds "$(process_elapsed_seconds "$pid")")"
+  printf 'PID=%s command=%s elapsed=%s' "$pid" "$cmd" "$elapsed"
+}
+
+lock_print_owner_info() {
+  local lock_path="$1" label="${2:-任务}" pid cmd elapsed hint
+  info "锁文件：${lock_path}"
+  pid="$(lock_read_pid "$lock_path")"
+  if [[ -n "$pid" ]]; then
+    info "持有进程：PID=${pid}"
+    cmd="$(lock_owner_command "$lock_path" "$pid")"
+    info "命令：${cmd}"
+    elapsed="$(format_duration_seconds "$(process_elapsed_seconds "$pid")")"
+    info "已运行：${elapsed}"
+    hint="$(lock_owner_log_hint "$lock_path" "$label" "$cmd")"
+    [[ -n "$hint" ]] && info "可查看日志：${hint}"
+  else
+    info "持有进程：未知（缺少 PID）"
+  fi
+  info "稍后重试，或执行：lq task status"
+}
+
 lock_cleanup_stale_if_possible() {
-  local lock_path="$1" pid_file pid cleaned=0
-  pid_file="${lock_path}.pid"
-  if [[ -f "$pid_file" ]]; then
-    pid="$(head -n 1 "$pid_file" 2>/dev/null || true)"
-    if [[ -n "$pid" ]] && ! pid_is_alive "$pid"; then
-      rm -f "$lock_path" "$pid_file" 2>/dev/null || true
-      cleaned=1
-    fi
+  local lock_path="$1"
+  if lock_is_stale "$lock_path"; then
+    lock_remove_files "$lock_path"
+    warn "检测到遗留任务锁，已自动清理。"
+    return 0
   fi
-  pid_file="${lock_path}.d/pid"
-  if [[ -f "$pid_file" ]]; then
-    pid="$(head -n 1 "$pid_file" 2>/dev/null || true)"
-    if [[ -n "$pid" ]] && ! pid_is_alive "$pid"; then
-      rm -rf "${lock_path}.d" 2>/dev/null || true
-      cleaned=1
-    fi
-  fi
-  if (( cleaned == 1 )); then
-    warn "检测到 stale lock，已清理。"
-  fi
+  return 0
 }
 
 lock_acquire() {
@@ -1322,6 +1485,7 @@ lock_acquire() {
     exec {fd}>"$lock_path"
     if flock -n "$fd"; then
       printf '%s\n' "$$" >"${lock_path}.pid" 2>/dev/null || true
+      lock_write_owner_meta "$lock_path" "$label"
       printf -v "$out_var" 'flock:%s:%s' "$fd" "$lock_path"
       return 0
     fi
@@ -1333,6 +1497,7 @@ lock_acquire() {
       exec {fd}>"$lock_path"
       if flock -n "$fd"; then
         printf '%s\n' "$$" >"${lock_path}.pid" 2>/dev/null || true
+        lock_write_owner_meta "$lock_path" "$label"
         printf -v "$out_var" 'flock:%s:%s' "$fd" "$lock_path"
         return 0
       fi
@@ -1342,6 +1507,7 @@ lock_acquire() {
     lock_dir="${lock_path}.d"
     if mkdir "$lock_dir" 2>/dev/null; then
       printf '%s\n' "$$" >"${lock_dir}/pid" 2>/dev/null || true
+      lock_write_owner_meta "$lock_path" "$label"
       printf -v "$out_var" 'mkdir:%s' "$lock_dir"
       return 0
     fi
@@ -1351,13 +1517,15 @@ lock_acquire() {
       rm -rf "$lock_dir" 2>/dev/null || true
       if mkdir "$lock_dir" 2>/dev/null; then
         printf '%s\n' "$$" >"${lock_dir}/pid" 2>/dev/null || true
+        lock_write_owner_meta "$lock_path" "$label"
         printf -v "$out_var" 'mkdir:%s' "$lock_dir"
         return 0
       fi
     fi
   fi
-  warn "已有 Leikwan 任务运行中，请稍后再试。"
-  [[ -n "$label" ]] && info "本次操作已跳过：${label}"
+  LEIKWAN_LOCK_CONFLICT=1
+  warn "已有 Leikwan 任务运行中，当前操作已跳过。"
+  lock_print_owner_info "$lock_path" "$label"
   return 1
 }
 
@@ -1370,11 +1538,12 @@ lock_release() {
       fd="${rest%%:*}"
       lock_path="${rest#*:}"
       eval "exec ${fd}>&-" 2>/dev/null || true
-      rm -f "${lock_path}.pid" 2>/dev/null || true
+      rm -f "$lock_path" "${lock_path}.pid" "${lock_path}.meta" 2>/dev/null || true
       ;;
     mkdir:*)
       lock_dir="${token#mkdir:}"
       rm -rf "$lock_dir"
+      rm -f "${lock_dir%.d}.meta" 2>/dev/null || true
       ;;
   esac
 }
@@ -1450,6 +1619,52 @@ EOF
     echo "锁状态: WARN stale ${stale[*]}"
     status_mark_result warn
   fi
+}
+
+task_status() {
+  local lock_path="$LEIKWAN_LOCK_PATH" pid cmd elapsed hint
+  if ! lock_files_exist "$lock_path"; then
+    ok "当前没有 Leikwan 任务运行。"
+    return 0
+  fi
+  if lock_is_stale "$lock_path"; then
+    warn "检测到遗留任务锁。"
+    info "锁文件：${lock_path}"
+    pid="$(lock_read_pid "$lock_path")"
+    [[ -n "$pid" ]] && info "记录 PID：${pid}"
+    info "可执行：lq task unlock-stale"
+    return 0
+  fi
+  pid="$(lock_read_pid "$lock_path")"
+  if [[ -n "$pid" ]]; then
+    cmd="$(lock_owner_command "$lock_path" "$pid")"
+    elapsed="$(format_duration_seconds "$(process_elapsed_seconds "$pid")")"
+    hint="$(lock_owner_log_hint "$lock_path" "任务" "$cmd")"
+    warn "已有 Leikwan 任务运行中。"
+    info "锁文件：${lock_path}"
+    info "持有进程：PID=${pid}"
+    info "命令：${cmd}"
+    info "已运行：${elapsed}"
+    [[ -n "$hint" ]] && info "可查看日志：${hint}"
+  else
+    warn "检测到任务锁，但无法读取 PID。"
+    info "锁文件：${lock_path}"
+  fi
+}
+
+task_unlock_stale() {
+  local lock_path="$LEIKWAN_LOCK_PATH"
+  if ! lock_files_exist "$lock_path"; then
+    ok "当前没有 Leikwan 任务运行。"
+    return 0
+  fi
+  if lock_is_stale "$lock_path"; then
+    lock_remove_files "$lock_path"
+    ok "已清理遗留任务锁。"
+    return 0
+  fi
+  warn "锁仍由活进程持有，未删除。"
+  lock_print_owner_info "$lock_path" "任务"
 }
 
 ensure_nc_for_test() {
@@ -2529,11 +2744,11 @@ get_latest_release_version() {
   [[ -n "$version" ]] && { printf '%s' "$version"; return 0; }
   if [[ "$mode" == "fast" ]]; then
     dl_warn "无法快速获取最新版本。"
-    dl_info "可直接选择“更新到最新版本”，或设置 LEIKWAN_TARGET_VERSION=1.4.15 后重试。"
+    dl_info "可直接选择“更新到最新版本”，或设置 LEIKWAN_TARGET_VERSION=1.4.16 后重试。"
     dl_info "如需完整探测，可设置 LEIKWAN_GITHUB_METADATA_MODE=full。"
   else
     dl_warn "无法获取最新版本。"
-    dl_info "可设置 LEIKWAN_TARGET_VERSION=1.4.15 后重试，或检查网络 / 镜像配置。"
+    dl_info "可设置 LEIKWAN_TARGET_VERSION=1.4.16 后重试，或检查网络 / 镜像配置。"
   fi
   return 1
 }
@@ -2754,7 +2969,7 @@ update_check() {
   latest_version="$(get_latest_release_version)" || return 1
   if [[ -z "$latest_version" ]]; then
     warn "无法快速获取最新版本。"
-    info "可直接选择“更新到最新版本”，或设置 LEIKWAN_TARGET_VERSION=1.4.15 后重试。"
+    info "可直接选择“更新到最新版本”，或设置 LEIKWAN_TARGET_VERSION=1.4.16 后重试。"
     info "如需完整探测，可设置 LEIKWAN_GITHUB_METADATA_MODE=full。"
     return 1
   fi
@@ -2876,12 +3091,12 @@ update_run() {
       [[ -n "$latest_version" ]] || { fail "LEIKWAN_TARGET_VERSION 无效：${LEIKWAN_TARGET_VERSION}"; exit 1; }
       tag="v${latest_version}"
     else
-      latest="$(update_latest_release)" || { dl_error "无法确定最新版本，已取消更新。"; dl_info "可设置 LEIKWAN_TARGET_VERSION=1.4.15 后重试。"; exit 1; }
+      latest="$(update_latest_release)" || { dl_error "无法确定最新版本，已取消更新。"; dl_info "可设置 LEIKWAN_TARGET_VERSION=1.4.16 后重试。"; exit 1; }
       IFS=$'\t' read -r tag latest_version <<<"$latest"
     fi
     if [[ -z "${latest_version:-}" ]] || ! release_version_from_tag "$latest_version" >/dev/null 2>&1; then
       dl_error "无法确定最新版本，已取消更新。"
-      dl_info "可设置 LEIKWAN_TARGET_VERSION=1.4.15 后重试。"
+      dl_info "可设置 LEIKWAN_TARGET_VERSION=1.4.16 后重试。"
       exit 1
     fi
     if [[ -z "${tag:-}" ]] || ! release_version_from_tag "$tag" >/dev/null 2>&1; then
@@ -5733,7 +5948,7 @@ add_forward() {
   row="${name}"$'\t'"${entry_port}"$'\t'"${target_host}"$'\t'"${target_port}"$'\t'"${out_iface}"$'\t'"${route_table}"$'\t'"${enabled}"$'\t'"${comment}"
   confirm_summary "添加转发目标摘要" "name=${name}\nentry_port=${entry_port}\ntarget=${target_host}:${target_port}\nprotocols=tcp,udp\nout_iface=${out_iface:-auto}\nroute_table=$(route_table_display "$route_table")\nenabled=${enabled}" || return 0
   replace_forward_row "$row"
-  apply_nft_rules "leikwan-relay" || warn "relay nftables 未应用成功，请检查后重试。"
+  apply_nft_rules "leikwan-relay" || warn "relay nftables 未应用成功；请返回“利群主机 B”菜单，选择“重新应用转发规则”。"
   info '下一步：A/B 两边执行"一键诊断"，并从外部机器测试公网入口端口。'
 }
 
@@ -5757,7 +5972,7 @@ delete_forward() {
   if apply_nft_rules "leikwan-relay"; then
     ok "已重新应用转发规则"
   else
-    warn "重新应用转发规则失败；你可以稍后执行：lq forward apply-relay"
+    warn "重新应用转发规则失败；请返回“利群主机 B”菜单，选择“重新应用转发规则”。"
   fi
 }
 
@@ -5774,7 +5989,7 @@ set_forward_enabled() {
   if apply_nft_rules "leikwan-relay"; then
     ok "已重新应用转发规则"
   else
-    warn "重新应用转发规则失败；你可以稍后执行：lq forward apply-relay"
+    warn "重新应用转发规则失败；请返回“利群主机 B”菜单，选择“重新应用转发规则”。"
   fi
 }
 
@@ -5807,7 +6022,7 @@ edit_forward() {
   if apply_nft_rules "leikwan-relay"; then
     ok "已重新应用转发规则"
   else
-    warn "重新应用转发规则失败；你可以稍后执行：lq forward apply-relay"
+    warn "重新应用转发规则失败；请返回“利群主机 B”菜单，选择“重新应用转发规则”。"
   fi
 }
 
@@ -7145,10 +7360,16 @@ ddns_refresh_once() {
   DDNS_PBR_DOMAIN_COUNT=0; DDNS_PBR_CHANGED_COUNT=0; DDNS_PBR_FAILED_COUNT=0
   DDNS_GLOBAL_DOMAIN_COUNT=0; DDNS_GLOBAL_CHANGED_COUNT=0; DDNS_GLOBAL_FAILED_COUNT=0
   if ! lock_acquire "$DDNS_LOCK_PATH" "DDNS 刷新" ddns_lock; then
+    ddns_emit INFO "DDNS 本轮跳过：已有任务运行。"
+    ddns_emit INFO "持有任务：$(lock_owner_inline "$DDNS_LOCK_PATH" "DDNS 刷新")"
+    ddns_emit INFO "下个 timer 周期会自动重试。"
     ddns_write_last_status "skipped" "$scope" "" "" "" "" "" "" false false false false
     return 0
   fi
   if ! global_lock_acquire; then
+    ddns_emit INFO "DDNS 本轮跳过：已有任务运行。"
+    ddns_emit INFO "持有任务：$(lock_owner_inline "$LEIKWAN_LOCK_PATH" "任务")"
+    ddns_emit INFO "下个 timer 周期会自动重试。"
     lock_release "$ddns_lock"
     ddns_write_last_status "skipped" "$scope" "" "" "" "" "" "" false false false false
     return 0
@@ -8573,7 +8794,7 @@ apply_relay_rules_background() {
 apply_relay_rules_menu() {
   local choice
   while true; do
-    print_menu_header "重新应用利群转发规则"
+    print_menu_header "重新应用转发规则"
     echo "1. 前台执行"
     echo "2. 后台执行并写入 ${APPLY_RELAY_LOG}"
     echo "0. 返回"
@@ -8762,7 +8983,7 @@ nftables_menu() {
     print_menu_header "nftables 规则管理"
     echo "1. 查看当前 nftables 规则"
     echo "2. 重新应用公网入口规则"
-    echo "3. 重新应用利群转发规则"
+    echo "3. 重新应用转发规则"
     echo "4. 清理脚本生成的 nftables 规则"
     echo "0. 返回"
     choice="$(prompt_menu_choice "请选择：")"
@@ -9855,7 +10076,6 @@ config_export() {
     esac
   done
   if ! lock_acquire "$CONFIG_LOCK_PATH" "配置导入/导出" config_lock; then
-    warn "已有 Leikwan 任务运行中，请稍后再试。"
     return 1
   fi
   if [[ "$mode" == "full" ]]; then
@@ -10134,11 +10354,9 @@ config_import() {
   config_validate_archive_members "$pkg" "配置包" || return 1
   need_root_unless_dry_run
   if ! lock_acquire "$CONFIG_LOCK_PATH" "配置导入/导出" config_lock; then
-    warn "已有 Leikwan 任务运行中，请稍后再试。"
     return 1
   fi
   if ! global_lock_acquire; then
-    warn "已有 Leikwan 任务运行中，请稍后再试。"
     lock_release "$config_lock"
     return 1
   fi
@@ -13644,23 +13862,26 @@ entries_menu() {
   done
 }
 
+print_forwards_menu_options() {
+  print_menu_header "转发目标管理"
+  echo "1. 添加转发目标"
+  echo "2. 修改转发目标"
+  echo "3. 删除转发目标"
+  echo "4. 查看转发目标"
+  echo "5. 启用 / 禁用转发目标"
+  echo "6. 解析 target_host"
+  echo "7. 测试单个转发目标"
+  echo "8. 导入 forwards.tsv（高级）"
+  echo "9. 导出 forwards.tsv"
+  echo "10. 生成转发入口输出"
+  echo "0. 返回"
+  info "DDNS / 域名解析变化检测已移动到主菜单“DDNS”。"
+}
+
 forwards_menu() {
   local choice
   while true; do
-    print_menu_header "转发目标管理"
-    echo "1. 添加转发目标"
-    echo "2. 修改转发目标"
-    echo "3. 删除转发目标"
-    echo "4. 查看转发目标"
-    echo "5. 启用 / 禁用转发目标"
-    echo "6. 重新应用利群转发规则"
-    echo "7. 解析 target_host"
-    echo "8. 测试单个转发目标"
-    echo "9. 导入 forwards.tsv（高级）"
-    echo "10. 导出 forwards.tsv"
-    echo "11. 生成转发入口输出"
-    echo "12. DDNS 自动刷新（已移动到主菜单）"
-    echo "0. 返回"
+    print_forwards_menu_options
     choice="$(prompt_menu_choice "请选择：")"
     case "$choice" in
       1) run_menu_action_pause add_forward ;;
@@ -13668,13 +13889,11 @@ forwards_menu() {
       3) run_menu_action_pause delete_forward ;;
       4) run_menu_action_pause list_forwards ;;
       5) run_menu_action_pause set_forward_enabled ;;
-      6) apply_relay_rules_menu ;;
-      7) run_menu_action_pause resolve_forward_targets_action ;;
-      8) run_menu_action_pause test_forward ;;
-      9) run_menu_action_pause import_forwards_tsv ;;
-      10) run_menu_action_pause export_forwards_tsv ;;
-      11) run_menu_action generate_forward_outputs ;;
-      12) info "DDNS 自动刷新已提升为主菜单入口，也可继续从这里进入。"; ddns_menu ;;
+      6) run_menu_action_pause resolve_forward_targets_action ;;
+      7) run_menu_action_pause test_forward ;;
+      8) run_menu_action_pause import_forwards_tsv ;;
+      9) run_menu_action_pause export_forwards_tsv ;;
+      10) run_menu_action generate_forward_outputs ;;
       0) return 0 ;;
     esac
   done
@@ -14170,17 +14389,21 @@ status_diagnostics_menu() {
   done
 }
 
+print_relay_host_menu_options() {
+  print_menu_header "利群主机 B"
+  echo "1. 公网入口管理"
+  echo "2. 转发目标管理"
+  echo "3. IPv4 PBR 出口策略"
+  echo "4. 重新应用转发规则"
+  echo "5. 查看 B 端状态"
+  echo "0. 返回"
+}
+
 relay_host_menu() {
   local choice
   ensure_role_or_warn leikwan-relay || return 0
   while true; do
-    print_menu_header "利群主机 B"
-    echo "1. 公网入口管理"
-    echo "2. 转发目标管理"
-    echo "3. IPv4 PBR 出口策略"
-    echo "4. 重新应用转发规则"
-    echo "5. 查看 B 端状态"
-    echo "0. 返回"
+    print_relay_host_menu_options
     choice="$(prompt_menu_choice "请选择：")"
     case "$choice" in
       1) entries_menu ;;
@@ -14495,6 +14718,13 @@ main() {
     logs)
       shift
       run_cli_action logs_cli "$@"
+      ;;
+    task)
+      case "${2:-}" in
+        status) run_cli_action task_status ;;
+        unlock-stale) run_cli_action task_unlock_stale ;;
+        *) fail "未知 task 子命令：${2:-}"; print_help; exit 1 ;;
+      esac
       ;;
     update)
       case "${2:-}" in

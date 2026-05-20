@@ -21,7 +21,7 @@ mkdir -p "$LEIKWAN_RUN_DIR"
 source "$ROOT_DIR/leikwan-toolkit.sh"
 
 main_out="$(print_main_menu_options)"
-grep -q "Leikwan Toolkit 1.4.15 LTS" <<<"$main_out"
+grep -q "Leikwan Toolkit 1.4.16 LTS" <<<"$main_out"
 grep -q "1." <<<"$main_out"
 grep -q "2." <<<"$main_out"
 grep -q "3." <<<"$main_out"
@@ -56,6 +56,18 @@ grep -q "7." <<<"$advanced_out"
 grep -q "系统网络优化" <<<"$advanced_out"
 grep -q "8." <<<"$advanced_out"
 grep -q "0." <<<"$advanced_out"
+
+relay_out="$(print_relay_host_menu_options)"
+grep -q "4. 重新应用转发规则" <<<"$relay_out"
+
+forwards_out="$(print_forwards_menu_options)"
+grep -q "6. 解析 target_host" <<<"$forwards_out"
+grep -q "10. 生成转发入口输出" <<<"$forwards_out"
+if grep -q "重新应用利群转发规则" <<<"$forwards_out" || grep -Eq '^[0-9]+\. .*DDNS 自动刷新' <<<"$forwards_out"; then
+  echo "FAIL: forwards menu contains duplicate apply-relay or numbered DDNS entry" >&2
+  echo "$forwards_out" >&2
+  exit 1
+fi
 
 status_out="$(print_status_diagnostics_menu_options)"
 grep -q "1." <<<"$status_out"

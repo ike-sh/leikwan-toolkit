@@ -45,7 +45,7 @@ if update_release_asset_url "v" "" "" >/dev/null 2>&1; then
   exit 1
 fi
 
-LEIKWAN_TARGET_VERSION=1.4.15
+LEIKWAN_TARGET_VERSION=1.4.16
 target_out="$(update_run 1 2>&1 || true)"
 grep -q "当前已是最新版本" <<<"$target_out"
 ! grep -q "$empty_pkg_literal" <<<"$target_out"

@@ -1,6 +1,6 @@
 # 验收清单
 
-本页用于 Leikwan Toolkit 1.4.15 LTS 正式版验收。
+本页用于 Leikwan Toolkit 1.4.16 LTS 正式版验收。
 
 ## 版本
 
@@ -12,8 +12,8 @@ bash leikwan-toolkit.sh --version
 期望：
 
 ```text
-TOOL_VERSION="1.4.15"
-leikwan-toolkit 1.4.15 LTS
+TOOL_VERSION="1.4.16"
+leikwan-toolkit 1.4.16 LTS
 ```
 
 ## 打包
@@ -30,8 +30,8 @@ bash scripts/package-release.sh
 期望生成：
 
 ```text
-dist/leikwan-toolkit-1.4.15.tar.gz
-dist/leikwan-toolkit-1.4.15.tar.gz.sha256
+dist/leikwan-toolkit-1.4.16.tar.gz
+dist/leikwan-toolkit-1.4.16.tar.gz.sha256
 ```
 
 release 包不得包含旧入口文件：
@@ -347,7 +347,7 @@ cat /etc/leikwan-toolkit/status/last-apply.env
 - 创建快照时提醒可能包含 EasyTier network secret。
 - 恢复快照前二次确认，恢复后询问是否 reload systemd 并重启相关服务。
 
-高危操作前，例如删除转发目标、删除公网入口、重新应用利群转发规则，应生成 `/etc/leikwan-toolkit/snapshots/auto/auto-before-*.tar.gz`，且只保留最近 10 个自动快照。
+高危操作前，例如删除转发目标、删除公网入口、重新应用转发规则，应生成 `/etc/leikwan-toolkit/snapshots/auto/auto-before-*.tar.gz`，且只保留最近 10 个自动快照。
 
 ## 配置导入 / 导出
 

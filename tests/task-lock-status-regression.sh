@@ -9,24 +9,28 @@ source "$ROOT_DIR/tests/test-lib.sh"
 
 TMP_DIR="$(test_mktemp_dir "$ROOT_DIR")"
 trap 'rm -rf "$TMP_DIR"' EXIT
-
 export LEIKWAN_STATE_DIR="${TMP_DIR}/state"
 export LEIKWAN_BACKUP_DIR="${TMP_DIR}/backups"
 export LEIKWAN_RUN_DIR="${TMP_DIR}/run"
 export LEIKWAN_LOG_DISABLED=1
+export LEIKWAN_NO_CLEAR=1
 mkdir -p "$LEIKWAN_RUN_DIR"
 
 # shellcheck source=/dev/null
 source "$ROOT_DIR/leikwan-toolkit.sh"
 trap - ERR
 
-printf '%s\n' 999999 >"${LEIKWAN_LOCK_PATH}.pid"
-touch "$LEIKWAN_LOCK_PATH"
-stale_file="${TMP_DIR}/stale.out"
-global_lock_acquire >"$stale_file" 2>&1
-stale_out="$(cat "$stale_file")"
-grep -q "检测到遗留任务锁，已自动清理" <<<"$stale_out"
-global_lock_release
+no_lock_out="$(task_status 2>&1)"
+grep -q "当前没有 Leikwan 任务运行" <<<"$no_lock_out"
+cli_no_lock_out="$(
+  LEIKWAN_STATE_DIR="$LEIKWAN_STATE_DIR" \
+  LEIKWAN_BACKUP_DIR="$LEIKWAN_BACKUP_DIR" \
+  LEIKWAN_RUN_DIR="$LEIKWAN_RUN_DIR" \
+  LEIKWAN_LOG_DISABLED=1 \
+  LEIKWAN_NO_CLEAR=1 \
+  bash "$ROOT_DIR/leikwan-toolkit.sh" task status 2>&1
+)"
+grep -q "当前没有 Leikwan 任务运行" <<<"$cli_no_lock_out"
 
 holder_log="${TMP_DIR}/holder.log"
 (
@@ -43,26 +47,14 @@ for _ in {1..30}; do
   sleep 0.1
 done
 
-set +e
-busy_out="$(global_lock_acquire 2>&1)"
-busy_rc=$?
-set -e
+status_out="$(task_status 2>&1)"
 kill "$holder_pid" 2>/dev/null || true
 wait "$holder_pid" 2>/dev/null || true
 
-if (( busy_rc == 0 )); then
-  global_lock_release
-  echo "FAIL: global lock acquired while holder was active" >&2
-  cat "$holder_log" >&2
-  exit 1
-fi
-grep -q "已有 Leikwan 任务运行中，当前操作已跳过" <<<"$busy_out" || {
-  echo "FAIL: busy lock did not produce friendly warning" >&2
-  echo "$busy_out" >&2
-  cat "$holder_log" >&2
-  exit 1
-}
-grep -q "锁文件：" <<<"$busy_out"
-grep -q "持有进程：PID=" <<<"$busy_out"
+grep -q "锁文件：${LEIKWAN_LOCK_PATH}" <<<"$status_out"
+grep -q "持有进程：PID=" <<<"$status_out"
+grep -q "命令：" <<<"$status_out"
+grep -q "已运行：" <<<"$status_out"
+grep -q "可查看日志：" <<<"$status_out"
 
-echo "[OK] lock regression passed"
+echo "[OK] task lock status regression passed"

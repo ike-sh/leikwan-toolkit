@@ -83,9 +83,13 @@ lq update check
 lq update run
 lq update status
 lq update rollback
+lq task status
+lq task unlock-stale
 ```
 
 `lq update` 等价于 `lq update run`，用于直接进入更新到最新版本流程。
+
+`lq task status` 用于查看当前 Leikwan 任务锁持有者；`lq task unlock-stale` 只清理遗留锁，不会删除活进程持有的锁。
 
 ## 卸载
 
