@@ -146,14 +146,14 @@ EasyTier 成功下载的安装包会缓存到：
 
 ```text
 [WARN] 无法快速获取最新版本。
-[INFO] 可直接选择“更新到最新版本”，或设置 LEIKWAN_TARGET_VERSION=1.4.13 后重试。
+[INFO] 可直接选择“更新到最新版本”，或设置 LEIKWAN_TARGET_VERSION=1.4.14 后重试。
 [INFO] 如需完整探测，可设置 LEIKWAN_GITHUB_METADATA_MODE=full。
 ```
 
 这时不会输出空的“最新版本”，也不会构造空版本下载 URL。可检查网络，或在确认版本号后使用：
 
 ```bash
-export LEIKWAN_TARGET_VERSION=1.4.13
+export LEIKWAN_TARGET_VERSION=1.4.14
 lq update run
 ```
 

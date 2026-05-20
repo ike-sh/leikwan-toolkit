@@ -1,5 +1,11 @@
 # Release Notes
 
+## 1.4.14 LTS
+
+- 修复 `PBR -> 应用 PBR` 中 forward 来源规则仍使用通用 `first-success` resolver 的问题，统一改用转发 / PBR majority resolver。
+- 修复 doctor 在 forward/PBR 域名 DNS 分歧时误报“当前采用 1.1.1.1”的提示，改为显示转发 / PBR 场景当前采用的多数结果。
+- 调整 `forward apply-relay --auto-fix-route`：当实际路由暂时没有返回 table 时，不再自动把已有 `T_CN2` 等 route_table 元数据清空。
+
 ## 1.4.13 LTS
 
 - 为转发目标 / PBR 场景新增多数优先的域名解析选择：多 DNS 结果分歧时，若某个 IP 至少出现两次且为唯一多数，转发和 PBR 写入统一使用该 IP。

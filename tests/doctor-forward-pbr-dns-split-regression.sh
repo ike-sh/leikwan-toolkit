@@ -9,6 +9,7 @@ source "$ROOT_DIR/tests/test-lib.sh"
 
 TMP_DIR="$(test_mktemp_dir "$ROOT_DIR")"
 trap 'rm -rf "$TMP_DIR"' EXIT
+export TMPDIR="$TMP_DIR"
 
 export LEIKWAN_STATE_DIR="${TMP_DIR}/state"
 export LEIKWAN_BACKUP_DIR="${TMP_DIR}/backups"
@@ -20,7 +21,6 @@ mkdir -p "$LEIKWAN_RUN_DIR"
 # shellcheck source=/dev/null
 source "$ROOT_DIR/leikwan-toolkit.sh"
 
-need_root_unless_dry_run() { :; }
 dnsutils_auto_install() { :; }
 dig() {
   local server="${4#@}"
@@ -37,29 +37,37 @@ getent() {
     *) return 1 ;;
   esac
 }
+ddns_timer_state() { printf '%s' "inactive"; }
 
 ensure_tsv_files >/dev/null
+mkdir -p "$PBR_DIR" "$STATUS_DIR"
 cat >"$FORWARDS_TSV" <<'EOF'
 # name	entry_port	target_host	target_port	out_iface	route_table	enabled	comment
-tw	10004	tw.ike-nicholas.xyz	52936		T_CN2	true	Taiwan
+tw	10004	tw.ike-nicholas.xyz	52936	eth0	T_CN2	true	Taiwan
+EOF
+cat >"$PBR_STATIC_CONF" <<'EOF'
+36.234.134.253/32 CN2 forward tw tw.ike-nicholas.xyz
+EOF
+cat >"$DDNS_STATUS_FILE" <<'EOF'
+LAST_DDNS_TIME=2026-05-20 12:00:00
+LAST_DDNS_RESULT=ok
+LAST_DDNS_PUBLIC_IP=203.0.113.8
+LAST_DDNS_PUBLIC_IP_SOURCE=https://api.ipify.org
+LAST_DDNS_DNS_SPLIT_DETECTED=true
+LAST_DDNS_DNS_SPLIT_DOMAIN=tw.ike-nicholas.xyz
+LAST_DDNS_DNS_SELECTED_IP=1.1.1.1
+LAST_DDNS_RELAY_RESTART_NEEDED=false
 EOF
 
-resolve_out="$(resolve_forwards 2>&1)"
-grep -q "转发/PBR 场景按多数结果选择：36.234.134.253" <<<"$resolve_out"
-awk -F'\t' '$1=="tw" && $4=="36.234.134.253" {found=1} END{exit !found}' "$RESOLVED_TSV"
-if awk -F'\t' '$1=="tw" && $4=="1.1.1.1" {found=1} END{exit !found}' "$RESOLVED_TSV"; then
-  echo "FAIL: resolved.tsv used first-success IP" >&2
-  cat "$RESOLVED_TSV" >&2
+out="$(report_ddns_global_state 2>&1)"
+grep -q "检测到 DNS 传播不一致：tw.ike-nicholas.xyz" <<<"$out"
+grep -q "转发/PBR 场景当前采用多数结果：36.234.134.253" <<<"$out"
+bad_current="当前采用 "
+bad_current="${bad_current}1.1.1.1"
+if grep -q "$bad_current" <<<"$out"; then
+  echo "FAIL: doctor still says forward/PBR currently uses first-success IP" >&2
+  echo "$out" >&2
   exit 1
 fi
 
-list_out="$(display_forwards 2>&1)"
-grep -q "tw.ike-nicholas.xyz:52936" <<<"$list_out"
-grep -q "36.234.134.253" <<<"$list_out"
-if grep -q "1.1.1.1" <<<"$list_out"; then
-  echo "FAIL: forward list displayed first-success IP" >&2
-  echo "$list_out" >&2
-  exit 1
-fi
-
-echo "[OK] forward domain resolution regression passed"
+echo "[OK] doctor forward/PBR DNS split regression passed"

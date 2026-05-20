@@ -47,6 +47,15 @@ bash tests/entry-port-pool-message-regression.sh
 section "PBR forward domain resolution regression"
 bash tests/pbr-forward-domain-resolution-regression.sh
 
+section "PBR apply forward majority regression"
+bash tests/pbr-apply-forward-majority-regression.sh
+
+section "doctor forward/PBR DNS split regression"
+bash tests/doctor-forward-pbr-dns-split-regression.sh
+
+section "forward route_table sync regression"
+bash tests/forward-route-table-sync-regression.sh
+
 section "forward domain resolution regression"
 bash tests/forward-domain-resolution-regression.sh
 

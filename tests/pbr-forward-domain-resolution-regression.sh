@@ -26,7 +26,8 @@ dig() {
   local server="${4#@}"
   case "$server" in
     1.1.1.1) printf '%s\n' "1.1.1.1" ;;
-    8.8.8.8|223.5.5.5|119.29.29.29) printf '%s\n' "36.234.134.253" ;;
+    8.8.8.8) printf '%s\n' "8.8.8.8" ;;
+    223.5.5.5|119.29.29.29) printf '%s\n' "36.234.134.253" ;;
     *) return 1 ;;
   esac
 }
@@ -40,7 +41,7 @@ getent() {
 resolve_domain_ipv4_multi tw.ike-nicholas.xyz >/dev/null
 [[ "$RESOLVE_SELECTED_IP" == "1.1.1.1" ]]
 
-resolve_domain_ipv4_for_pbr tw.ike-nicholas.xyz >"${TMP_DIR}/resolve.out" 2>&1
+resolve_domain_ipv4_for_forward_pbr tw.ike-nicholas.xyz >"${TMP_DIR}/resolve.out" 2>&1
 resolve_out="$(cat "${TMP_DIR}/resolve.out")"
 [[ "$RESOLVE_SELECTED_IP" == "36.234.134.253" ]]
 grep -q "转发/PBR 场景按多数结果选择：36.234.134.253" <<<"$resolve_out"

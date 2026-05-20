@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-TOOL_VERSION="1.4.13"
+TOOL_VERSION="1.4.14"
 RELEASE_CHANNEL="LTS"
 PROJECT_NAME="leikwan-toolkit"
 PROJECT_TITLE="利群快速组网工具"
@@ -1831,10 +1831,14 @@ resolve_domain_ipv4_for_forward_context() {
 }
 
 resolve_domain_ipv4_for_forward() {
-  resolve_domain_ipv4_for_forward_context "$1" "转发/PBR"
+  resolve_domain_ipv4_for_forward_pbr "$1"
 }
 
 resolve_domain_ipv4_for_pbr() {
+  resolve_domain_ipv4_for_forward_pbr "$1"
+}
+
+resolve_domain_ipv4_for_forward_pbr() {
   resolve_domain_ipv4_for_forward_context "$1" "转发/PBR"
 }
 
@@ -2520,11 +2524,11 @@ get_latest_release_version() {
   [[ -n "$version" ]] && { printf '%s' "$version"; return 0; }
   if [[ "$mode" == "fast" ]]; then
     dl_warn "无法快速获取最新版本。"
-    dl_info "可直接选择“更新到最新版本”，或设置 LEIKWAN_TARGET_VERSION=1.4.13 后重试。"
+    dl_info "可直接选择“更新到最新版本”，或设置 LEIKWAN_TARGET_VERSION=1.4.14 后重试。"
     dl_info "如需完整探测，可设置 LEIKWAN_GITHUB_METADATA_MODE=full。"
   else
     dl_warn "无法获取最新版本。"
-    dl_info "可设置 LEIKWAN_TARGET_VERSION=1.4.13 后重试，或检查网络 / 镜像配置。"
+    dl_info "可设置 LEIKWAN_TARGET_VERSION=1.4.14 后重试，或检查网络 / 镜像配置。"
   fi
   return 1
 }
@@ -2745,7 +2749,7 @@ update_check() {
   latest_version="$(get_latest_release_version)" || return 1
   if [[ -z "$latest_version" ]]; then
     warn "无法快速获取最新版本。"
-    info "可直接选择“更新到最新版本”，或设置 LEIKWAN_TARGET_VERSION=1.4.13 后重试。"
+    info "可直接选择“更新到最新版本”，或设置 LEIKWAN_TARGET_VERSION=1.4.14 后重试。"
     info "如需完整探测，可设置 LEIKWAN_GITHUB_METADATA_MODE=full。"
     return 1
   fi
@@ -2867,12 +2871,12 @@ update_run() {
       [[ -n "$latest_version" ]] || { fail "LEIKWAN_TARGET_VERSION 无效：${LEIKWAN_TARGET_VERSION}"; exit 1; }
       tag="v${latest_version}"
     else
-      latest="$(update_latest_release)" || { dl_error "无法确定最新版本，已取消更新。"; dl_info "可设置 LEIKWAN_TARGET_VERSION=1.4.13 后重试。"; exit 1; }
+      latest="$(update_latest_release)" || { dl_error "无法确定最新版本，已取消更新。"; dl_info "可设置 LEIKWAN_TARGET_VERSION=1.4.14 后重试。"; exit 1; }
       IFS=$'\t' read -r tag latest_version <<<"$latest"
     fi
     if [[ -z "${latest_version:-}" ]] || ! release_version_from_tag "$latest_version" >/dev/null 2>&1; then
       dl_error "无法确定最新版本，已取消更新。"
-      dl_info "可设置 LEIKWAN_TARGET_VERSION=1.4.13 后重试。"
+      dl_info "可设置 LEIKWAN_TARGET_VERSION=1.4.14 后重试。"
       exit 1
     fi
     if [[ -z "${tag:-}" ]] || ! release_version_from_tag "$tag" >/dev/null 2>&1; then
@@ -5512,7 +5516,11 @@ report_forward_route_consistency() {
   if [[ -n "$configured_iface" && "$configured_iface" != "$actual_dev" ]]; then
     report WARN "转发目标 ${name} 出口接口不一致：配置 ${configured_iface}/$(route_table_display "$configured_table")，实际 ${actual_dev}/$(route_table_display "$actual_table")，可能导致 nft oifname 不匹配。"
   elif ! route_table_same "$configured_table" "$actual_table"; then
-    report INFO "转发目标 ${name} 出口接口一致但 route_table 元数据不同：配置 $(route_table_display "$configured_table")，实际 $(route_table_display "$actual_table")。可用 auto-fix-route 同步。"
+    if [[ -n "$configured_table" && "$configured_table" != "-" && -z "$actual_table" ]]; then
+      report INFO "转发目标 ${name} route_table 元数据保留为 $(route_table_display "$configured_table")；实际路由暂时未返回表名，可能是 PBR 未正确应用或域名解析分歧导致。"
+    else
+      report INFO "转发目标 ${name} 出口接口一致但 route_table 元数据不同：配置 $(route_table_display "$configured_table")，实际 $(route_table_display "$actual_table")。可用 auto-fix-route 同步。"
+    fi
   else
     report OK "转发目标 ${name} 出口一致：${actual_dev} / $(route_table_display "$actual_table")"
   fi
@@ -5530,7 +5538,11 @@ sync_forward_routes_if_needed() {
       IFS=$'\034' read -r target_ip actual_dev actual_table actual_src actual_via route_line <<<"$route_info"
       if [[ -n "$actual_dev" ]]; then
         [[ -n "$out_iface" && "$out_iface" == "$actual_dev" ]] || mismatch=1
-        route_table_same "$route_table" "$actual_table" || mismatch=1
+        if [[ -n "$route_table" && "$route_table" != "-" && -z "$actual_table" ]]; then
+          info "转发目标 ${name} route_table 保留为 $(route_table_display "$route_table")；实际路由暂时未返回表名，可能是 PBR 未正确应用或域名解析分歧导致。"
+        else
+          route_table_same "$route_table" "$actual_table" || mismatch=1
+        fi
         if (( mismatch == 1 )); then
           if [[ -n "$out_iface" && "$out_iface" != "$actual_dev" ]]; then
             warn "$(forward_route_mismatch_text "$name" "$target_host" "$out_iface" "$route_table" "$actual_dev" "$actual_table")"
@@ -5539,7 +5551,11 @@ sync_forward_routes_if_needed() {
           fi
           if (( auto_fix == 1 )) || { is_interactive && prompt_yes_no "是否自动修正为 out_iface=${actual_dev} route_table=$(route_table_display "$actual_table")？" "Y"; }; then
             out_iface="$actual_dev"
-            route_table="$actual_table"
+            if [[ -n "$route_table" && "$route_table" != "-" && -z "$actual_table" ]]; then
+              info "保留 ${name} 的 route_table=$(route_table_display "$route_table")，不自动改为空。"
+            else
+              route_table="$actual_table"
+            fi
             fixed=1
           else
             warn "未自动修正 ${name}。可执行：lq forward edit ${name}，或 lq forward apply-relay --auto-fix-route"
@@ -5555,7 +5571,7 @@ sync_forward_routes_if_needed() {
     content="${content}"$'\n'"${row}"
   done < <(forwards_rows_usv)
   if (( fixed == 1 )); then
-    tmp="$(mktemp)"
+    tmp="$(make_state_tmp "$FORWARDS_DIR" "forwards")" || return 1
     printf '%s\n' "$content" >"$tmp"
     write_file "$FORWARDS_TSV" "$(cat "$tmp")" 600
     rm -f "$tmp"
@@ -8837,7 +8853,7 @@ pbr_table_id() {
 pbr_refresh_dynamic_rules() {
   [[ -f "$PBR_STATIC_CONF" ]] || return 0
   local tmp line cidr group source_type source_name source_host _rest current_ip new_cidr changed=0
-  tmp="$(mktemp)"
+  tmp="$(make_state_tmp "$PBR_DIR" "pbr-static")" || return 1
   while IFS= read -r line || [[ -n "$line" ]]; do
     if [[ -z "$line" || "$line" == \#* ]]; then
       printf '%s\n' "$line" >>"$tmp"
@@ -8848,7 +8864,7 @@ pbr_refresh_dynamic_rules() {
       if is_ipv4 "$source_host"; then
         new_cidr="${source_host}/32"
       else
-        if resolve_domain_ipv4_multi "$source_host"; then
+        if resolve_domain_ipv4_for_forward_pbr "$source_host"; then
           current_ip="$RESOLVE_SELECTED_IP"
         else
           current_ip=""
@@ -11316,6 +11332,34 @@ report_b_ddns_entry_monitor_status() {
   fi
 }
 
+domain_used_by_forward_pbr() {
+  local domain="$1"
+  [[ -n "$domain" ]] || return 1
+  if forwards_rows | awk -F'\t' -v host="$domain" '$3==host {found=1} END{exit found ? 0 : 1}'; then
+    return 0
+  fi
+  [[ -f "$PBR_STATIC_CONF" ]] || return 1
+  awk -v host="$domain" '
+    /^[[:space:]]*($|#)/ { next }
+    $3 == "forward" && $5 == host { found=1 }
+    END { exit found ? 0 : 1 }
+  ' "$PBR_STATIC_CONF"
+}
+
+report_forward_pbr_dns_split_context() {
+  local domain="$1" selected=""
+  domain_used_by_forward_pbr "$domain" || return 1
+  if resolve_domain_ipv4_for_forward_pbr "$domain"; then
+    selected="$RESOLVE_SELECTED_IP"
+  else
+    return 1
+  fi
+  [[ "$RESOLVE_SPLIT_DETECTED" == "true" ]] || return 1
+  report WARN "检测到 DNS 传播不一致：${domain}"
+  report INFO "转发/PBR 场景当前采用多数结果：${selected}"
+  return 0
+}
+
 report_ddns_global_state() {
   local public_ip public_source result last_time forward_failed entry_failed pbr_failed restart_needed update_dns dns_split dns_domain dns_selected ddns_enabled timer_state
   public_ip="$(env_file_get "$DDNS_STATUS_FILE" LAST_DDNS_PUBLIC_IP)"
@@ -11348,8 +11392,12 @@ report_ddns_global_state() {
     [[ -n "$pbr_failed" ]] && report INFO "PBR 域名失败：${pbr_failed}"
   fi
   if [[ "${dns_split,,}" == "true" ]]; then
-    report WARN "检测到 DNS 传播不一致：${dns_domain:-未知域名}，当前采用 ${dns_selected:-未知 IP}。"
-    report INFO "可调整 DNS_RESOLVE_SERVERS 或 DNS_RESOLVE_STRATEGY。"
+    if report_forward_pbr_dns_split_context "$dns_domain"; then
+      [[ -n "$dns_selected" ]] && report INFO "DDNS 策略最近采用（不用于转发/PBR 写入）：${dns_selected}"
+    else
+      report WARN "检测到 DNS 传播不一致：${dns_domain:-未知域名}，DDNS 策略最近采用 ${dns_selected:-未知 IP}。"
+      report INFO "可调整 DNS_RESOLVE_SERVERS 或 DNS_RESOLVE_STRATEGY。"
+    fi
   fi
   if { [[ "${ddns_enabled,,}" == "true" ]] || [[ "$timer_state" == "active" ]]; } && ! command -v dig >/dev/null 2>&1; then
     report WARN "dig 不存在，已尝试自动安装 dnsutils；当前将使用 nslookup / host / getent fallback。"
