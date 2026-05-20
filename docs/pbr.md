@@ -8,10 +8,11 @@ PBR 用来把指定后端 IPv4 固定到某个出口线路，例如 `T_CN2` 或 
 IPv4 多出口策略路由 / PBR
 1. 添加静态 PBR
 2. 从现有转发目标添加 PBR
-3. 删除 PBR 规则
-4. 应用 PBR
-5. 查看 PBR
-6. 域名 PBR 管理
+3. 修改 PBR 规则
+4. 删除 PBR 规则
+5. 应用 PBR
+6. 查看 PBR
+7. 域名 PBR 管理
 0. 返回
 ```
 
@@ -141,6 +142,12 @@ DDNS 和同步命令只自动管理两类来源：
 可以输入编号、完整 CIDR，或裸 IP。裸 IP 会按 `/32` 匹配。删除前会确认，确认后从 `static-routes.conf` 删除对应行并重新应用 PBR。
 
 删除域名 PBR 请使用 `lq pbr domain delete` 或域名 PBR 菜单；它会同时清理 `domain-routes.tsv`、`resolved-pbr-domains.tsv` 和 `pbr-domain:<name>` 来源规则，不会删除 static 规则。
+
+## 修改 PBR 规则
+
+菜单中的“修改 PBR 规则”和 CLI `lq pbr edit [cidr-or-index]` 使用同一套流程。静态 PBR 可修改目标 CIDR / 单 IP、出口接口元数据、路由表、备注和启用状态；单 IP 会自动补 `/32`，非法 CIDR 会被拒绝。
+
+`forward:<name>` 来源 PBR 由转发目标自动同步，默认不允许直接修改目标 CIDR。需要修改后端域名、端口、出口接口或路由表时，请进入“转发目标管理 -> 修改转发目标”。如确实需要脱离自动同步，可在编辑流程中二次确认“转为静态 PBR”。
 
 ## 应用
 

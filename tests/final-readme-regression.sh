@@ -4,14 +4,14 @@ set -Eeuo pipefail
 ROOT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
-grep -q "1.4.16" README.md
+grep -q "1.4.17" README.md
 grep -q "Shell LTS" README.md
 grep -q "lq init" README.md
 grep -q "DDNS" README.md
 grep -q "dnsutils" README.md
 grep -q "DDNS_RESTART_RELAY_COOLDOWN" README.md
 grep -q "build-release.sh" README.md
-grep -q "leikwan-toolkit-1.4.16.tar.gz" README.md
+grep -q "leikwan-toolkit-1.4.17.tar.gz" README.md
 grep -q "系统网络优化" README.md
 grep -q "8.8.8.8" README.md
 grep -q "1.1.1.1" README.md

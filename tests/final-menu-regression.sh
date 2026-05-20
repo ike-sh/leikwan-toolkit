@@ -21,7 +21,7 @@ mkdir -p "$LEIKWAN_RUN_DIR"
 source "$ROOT_DIR/leikwan-toolkit.sh"
 
 main_out="$(print_main_menu_options)"
-grep -q "Leikwan Toolkit 1.4.16 LTS" <<<"$main_out"
+grep -q "Leikwan Toolkit 1.4.17 LTS" <<<"$main_out"
 grep -q "1." <<<"$main_out"
 grep -q "2." <<<"$main_out"
 grep -q "3." <<<"$main_out"
@@ -68,6 +68,15 @@ if grep -q "重新应用利群转发规则" <<<"$forwards_out" || grep -Eq '^[0-
   echo "$forwards_out" >&2
   exit 1
 fi
+
+pbr_out="$(print_pbr_menu_options)"
+grep -q "1. 添加静态 PBR" <<<"$pbr_out"
+grep -q "2. 从现有转发目标添加 PBR" <<<"$pbr_out"
+grep -q "3. 修改 PBR 规则" <<<"$pbr_out"
+grep -q "4. 删除 PBR 规则" <<<"$pbr_out"
+grep -q "5. 应用 PBR" <<<"$pbr_out"
+grep -q "6. 查看 PBR" <<<"$pbr_out"
+grep -q "7. 域名 PBR 管理" <<<"$pbr_out"
 
 status_out="$(print_status_diagnostics_menu_options)"
 grep -q "1." <<<"$status_out"

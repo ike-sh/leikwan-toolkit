@@ -1,5 +1,11 @@
 # Release Notes
 
+## 1.4.17 LTS
+
+- PBR 菜单新增“修改 PBR 规则”，静态 PBR 可交互修改 CIDR、出口接口元数据、路由表、备注和启用状态。
+- 新增 `lq pbr edit [cidr-or-index]`，CLI 可进入同一套编辑流程。
+- forward 来源 PBR 默认保护目标 CIDR，提示应修改对应转发目标；需要脱离自动同步时可二次确认转为静态 PBR。
+
 ## 1.4.16 LTS
 
 - 去掉“转发目标管理”里的重复 apply-relay 入口，保留“利群主机 B -> 重新应用转发规则”作为唯一菜单入口；CLI `lq forward apply-relay` 继续保留。

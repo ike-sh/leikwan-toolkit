@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-TOOL_VERSION="1.4.16"
+TOOL_VERSION="1.4.17"
 RELEASE_CHANNEL="LTS"
 PROJECT_NAME="leikwan-toolkit"
 PROJECT_TITLE="利群快速组网工具"
@@ -916,6 +916,7 @@ ${PROJECT_NAME} $(tool_version_label)
   sudo bash leikwan-toolkit.sh forward apply-relay
   sudo bash leikwan-toolkit.sh forward apply-relay --auto-fix-route
   sudo bash leikwan-toolkit.sh pbr delete 203.0.113.10/32
+  sudo bash leikwan-toolkit.sh pbr edit [cidr-or-index]
   sudo bash leikwan-toolkit.sh pbr sync-from-forwards
   sudo bash leikwan-toolkit.sh pbr domain add|list|delete|sync
   sudo bash leikwan-toolkit.sh update        # 等价于 update run
@@ -2744,11 +2745,11 @@ get_latest_release_version() {
   [[ -n "$version" ]] && { printf '%s' "$version"; return 0; }
   if [[ "$mode" == "fast" ]]; then
     dl_warn "无法快速获取最新版本。"
-    dl_info "可直接选择“更新到最新版本”，或设置 LEIKWAN_TARGET_VERSION=1.4.16 后重试。"
+    dl_info "可直接选择“更新到最新版本”，或设置 LEIKWAN_TARGET_VERSION=1.4.17 后重试。"
     dl_info "如需完整探测，可设置 LEIKWAN_GITHUB_METADATA_MODE=full。"
   else
     dl_warn "无法获取最新版本。"
-    dl_info "可设置 LEIKWAN_TARGET_VERSION=1.4.16 后重试，或检查网络 / 镜像配置。"
+    dl_info "可设置 LEIKWAN_TARGET_VERSION=1.4.17 后重试，或检查网络 / 镜像配置。"
   fi
   return 1
 }
@@ -2969,7 +2970,7 @@ update_check() {
   latest_version="$(get_latest_release_version)" || return 1
   if [[ -z "$latest_version" ]]; then
     warn "无法快速获取最新版本。"
-    info "可直接选择“更新到最新版本”，或设置 LEIKWAN_TARGET_VERSION=1.4.16 后重试。"
+    info "可直接选择“更新到最新版本”，或设置 LEIKWAN_TARGET_VERSION=1.4.17 后重试。"
     info "如需完整探测，可设置 LEIKWAN_GITHUB_METADATA_MODE=full。"
     return 1
   fi
@@ -3091,12 +3092,12 @@ update_run() {
       [[ -n "$latest_version" ]] || { fail "LEIKWAN_TARGET_VERSION 无效：${LEIKWAN_TARGET_VERSION}"; exit 1; }
       tag="v${latest_version}"
     else
-      latest="$(update_latest_release)" || { dl_error "无法确定最新版本，已取消更新。"; dl_info "可设置 LEIKWAN_TARGET_VERSION=1.4.16 后重试。"; exit 1; }
+      latest="$(update_latest_release)" || { dl_error "无法确定最新版本，已取消更新。"; dl_info "可设置 LEIKWAN_TARGET_VERSION=1.4.17 后重试。"; exit 1; }
       IFS=$'\t' read -r tag latest_version <<<"$latest"
     fi
     if [[ -z "${latest_version:-}" ]] || ! release_version_from_tag "$latest_version" >/dev/null 2>&1; then
       dl_error "无法确定最新版本，已取消更新。"
-      dl_info "可设置 LEIKWAN_TARGET_VERSION=1.4.16 后重试。"
+      dl_info "可设置 LEIKWAN_TARGET_VERSION=1.4.17 后重试。"
       exit 1
     fi
     if [[ -z "${tag:-}" ]] || ! release_version_from_tag "$tag" >/dev/null 2>&1; then
@@ -9132,10 +9133,22 @@ pbr_apply() {
     (( release_global_lock == 1 )) && global_lock_release
     return 0
   fi
-  local cidr group _source_type _source_name _source_host table_id gw table_name normalized apply_failed=0
+  local line cidr group table_id gw table_name normalized apply_failed=0
   while ip rule del priority "$PBR_PRIORITY" 2>/dev/null; do :; done
-  while read -r cidr group _source_type _source_name _source_host; do
-    [[ -n "$cidr" && "$cidr" != \#* ]] || continue
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    line="${line//$'\r'/}"
+    line="$(normalize_menu_choice "$line")"
+    [[ -n "$line" && "$line" != \#* ]] || continue
+    if ! pbr_parse_rule_line "$line"; then
+      warn "跳过无效 PBR 规则：${line}"
+      continue
+    fi
+    if [[ "$PBR_RULE_ENABLED" == "false" ]]; then
+      info "跳过 disabled PBR：${PBR_RULE_CIDR} -> ${PBR_RULE_TABLE}"
+      continue
+    fi
+    cidr="$PBR_RULE_CIDR"
+    group="$PBR_RULE_GROUP"
     normalized="$(normalize_ipv4_cidr "$cidr" 2>/dev/null || true)"
     if [[ -z "$normalized" ]]; then
       warn "跳过无效 PBR 目标：${cidr}"
@@ -9195,6 +9208,113 @@ pbr_select_group() {
       *) echo "无效选择，请重新输入。" >&2 ;;
     esac
   done
+}
+
+pbr_metadata_value() {
+  local meta="$1" key="$2" token
+  if [[ "$key" == "remark" ]]; then
+    case "$meta" in
+      *"remark="*) printf '%s' "${meta#*remark=}" ;;
+    esac
+    return 0
+  fi
+  for token in $meta; do
+    case "$token" in
+      "${key}="*) printf '%s' "${token#*=}"; return 0 ;;
+    esac
+  done
+}
+
+pbr_parse_rule_line() {
+  local line="$1" cidr group source_type source_name source_host rest meta
+  PBR_RULE_RAW="$(normalize_menu_choice "${line//$'\r'/}")"
+  PBR_RULE_CIDR=""
+  PBR_RULE_GROUP=""
+  PBR_RULE_TABLE=""
+  PBR_RULE_SOURCE_TYPE="static"
+  PBR_RULE_SOURCE_NAME=""
+  PBR_RULE_SOURCE_HOST=""
+  PBR_RULE_SOURCE_DISPLAY="static"
+  PBR_RULE_IFACE=""
+  PBR_RULE_ENABLED="true"
+  PBR_RULE_REMARK=""
+  read -r cidr group source_type source_name source_host rest <<<"$PBR_RULE_RAW"
+  [[ -n "$cidr" && -n "$group" ]] || return 1
+  PBR_RULE_CIDR="$(normalize_ipv4_cidr "$cidr" 2>/dev/null || printf '%s' "$cidr")"
+  PBR_RULE_GROUP="${group#T_}"
+  PBR_RULE_TABLE="T_${PBR_RULE_GROUP}"
+  case "${source_type:-}" in
+    "")
+      meta=""
+      ;;
+    static)
+      meta="$(normalize_menu_choice "${source_name:-} ${source_host:-} ${rest:-}")"
+      ;;
+    forward)
+      PBR_RULE_SOURCE_TYPE="forward"
+      PBR_RULE_SOURCE_NAME="${source_name:-}"
+      PBR_RULE_SOURCE_HOST="${source_host:-}"
+      PBR_RULE_SOURCE_DISPLAY="forward:${PBR_RULE_SOURCE_NAME}"
+      [[ -n "$PBR_RULE_SOURCE_HOST" ]] && PBR_RULE_SOURCE_DISPLAY="${PBR_RULE_SOURCE_DISPLAY} ${PBR_RULE_SOURCE_HOST}"
+      meta="${rest:-}"
+      ;;
+    pbr-domain:*)
+      PBR_RULE_SOURCE_TYPE="pbr-domain"
+      PBR_RULE_SOURCE_NAME="${source_type#pbr-domain:}"
+      PBR_RULE_SOURCE_HOST="${source_name:-}"
+      PBR_RULE_SOURCE_DISPLAY="pbr-domain:${PBR_RULE_SOURCE_NAME}"
+      [[ -n "$PBR_RULE_SOURCE_HOST" ]] && PBR_RULE_SOURCE_DISPLAY="${PBR_RULE_SOURCE_DISPLAY} ${PBR_RULE_SOURCE_HOST}"
+      meta="$(normalize_menu_choice "${source_host:-} ${rest:-}")"
+      ;;
+    *)
+      PBR_RULE_SOURCE_TYPE="$source_type"
+      PBR_RULE_SOURCE_NAME="${source_name:-}"
+      PBR_RULE_SOURCE_HOST="${source_host:-}"
+      PBR_RULE_SOURCE_DISPLAY="$source_type"
+      [[ -n "$source_name" ]] && PBR_RULE_SOURCE_DISPLAY="${PBR_RULE_SOURCE_DISPLAY} ${source_name}"
+      [[ -n "$source_host" ]] && PBR_RULE_SOURCE_DISPLAY="${PBR_RULE_SOURCE_DISPLAY} ${source_host}"
+      meta="${rest:-}"
+      ;;
+  esac
+  PBR_RULE_IFACE="$(pbr_metadata_value "$meta" iface)"
+  PBR_RULE_ENABLED="$(pbr_metadata_value "$meta" enabled)"
+  case "${PBR_RULE_ENABLED,,}" in
+    false|0|no|n) PBR_RULE_ENABLED="false" ;;
+    *) PBR_RULE_ENABLED="true" ;;
+  esac
+  PBR_RULE_REMARK="$(pbr_metadata_value "$meta" remark)"
+}
+
+pbr_render_rule_line() {
+  local cidr="$1" group="$2" source_type="${3:-static}" source_name="${4:-}" source_host="${5:-}" iface="${6:-}" enabled="${7:-true}" remark="${8:-}"
+  local line
+  group="${group#T_}"
+  line="${cidr} ${group}"
+  case "$source_type" in
+    forward) line="${line} forward ${source_name} ${source_host}" ;;
+    pbr-domain) line="${line} pbr-domain:${source_name} ${source_host}" ;;
+    *) line="${line} static" ;;
+  esac
+  iface="$(normalize_menu_choice "$iface")"
+  enabled="$(normalize_menu_choice "$enabled")"
+  remark="${remark//$'\r'/ }"
+  remark="${remark//$'\n'/ }"
+  remark="$(normalize_menu_choice "$remark")"
+  [[ -n "$iface" ]] && line="${line} iface=${iface}"
+  case "${enabled,,}" in
+    false|0|no|n) line="${line} enabled=false" ;;
+    *) line="${line} enabled=true" ;;
+  esac
+  [[ -n "$remark" ]] && line="${line} remark=${remark}"
+  printf '%s\n' "$line"
+}
+
+pbr_write_rule_line() {
+  local line_no="$1" new_line="$2" tmp
+  tmp="$(mktemp)"
+  awk -v target="$line_no" -v replacement="$new_line" 'NR == target { print replacement; next } { print }' "$PBR_STATIC_CONF" >"$tmp"
+  write_file "$PBR_STATIC_CONF" "$(cat "$tmp")" 600
+  rm -f "$tmp"
 }
 
 pbr_add_static() {
@@ -9260,33 +9380,16 @@ pbr_add_from_forward() {
 
 pbr_rows() {
   [[ -f "$PBR_STATIC_CONF" ]] || return 0
-  local line line_no=0 cidr group source_type source_name rest normalized table_name source
+  local line line_no=0
   while IFS= read -r line || [[ -n "$line" ]]; do
     line_no=$((line_no + 1))
     line="${line//$'\r'/}"
     line="$(normalize_menu_choice "$line")"
     [[ -n "$line" && "$line" != \#* ]] || continue
-    cidr=""
-    group=""
-    source_type=""
-    source_name=""
-    rest=""
-    read -r cidr group source_type source_name rest <<<"$line"
-    [[ -n "$cidr" && -n "$group" ]] || continue
-    normalized="$(normalize_ipv4_cidr "$cidr" 2>/dev/null || true)"
-    [[ -n "$normalized" ]] || normalized="$cidr"
-    table_name="${group#T_}"
-    if [[ -z "$source_type" ]]; then
-      source="static"
-    elif [[ "$source_type" == "forward" && -n "$source_name" ]]; then
-      source="forward:${source_name}"
-      [[ -n "$rest" ]] && source="${source} ${rest}"
-    else
-      source="$source_type"
-      [[ -n "$source_name" ]] && source="${source} ${source_name}"
-      [[ -n "$rest" ]] && source="${source} ${rest}"
-    fi
-    printf '%s\t%s\t%s\t%s\n' "$line_no" "$normalized" "T_${table_name}" "$source"
+    pbr_parse_rule_line "$line" || continue
+    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+      "$line_no" "$PBR_RULE_CIDR" "$PBR_RULE_TABLE" "$PBR_RULE_SOURCE_DISPLAY" \
+      "${PBR_RULE_IFACE:-"-"}" "$PBR_RULE_ENABLED" "${PBR_RULE_REMARK:-"-"}"
   done <"$PBR_STATIC_CONF"
 }
 
@@ -9297,11 +9400,11 @@ pbr_rules_count() {
 display_pbr_rules() {
   local numbered="${1:-no}" title="${2:-}" labels
   [[ -n "$title" ]] && { echo; echo "$title"; }
-  labels=$'编号\t目标网段\t路由表\t来源'
+  labels=$'编号\t目标网段\t路由表\t来源\t出口接口\t启用\t备注'
   if [[ "$numbered" == "numbered" ]]; then
-    pbr_rows | awk -F'\t' '{printf "%d.\t%s\t%s\t%s\n", ++i, $2, $3, $4}' | render_tsv_table 78 "$labels"
+    pbr_rows | awk -F'\t' '{printf "%d.\t%s\t%s\t%s\t%s\t%s\t%s\n", ++i, $2, $3, $4, $5, $6, $7}' | render_tsv_table 120 "$labels"
   else
-    pbr_rows | awk -F'\t' '{printf "%d.\t%s\t%s\t%s\n", ++i, $2, $3, $4}' | render_tsv_table 78 "$labels"
+    pbr_rows | awk -F'\t' '{printf "%d.\t%s\t%s\t%s\t%s\t%s\t%s\n", ++i, $2, $3, $4, $5, $6, $7}' | render_tsv_table 120 "$labels"
   fi
 }
 
@@ -9344,10 +9447,10 @@ warn_pbr_selection_error() {
 }
 
 select_pbr_rule() {
-  local choice selected rc count
+  local action="${1:-删除}" choice selected rc count
   count="$(pbr_rules_count)"
   if (( count == 0 )); then
-    warn "当前没有 PBR 规则可删除。" >&2
+    warn "当前没有 PBR 规则可${action}。" >&2
     return 1
   fi
   display_pbr_rules numbered "当前 PBR 规则：" >&2
@@ -9382,7 +9485,7 @@ delete_pbr_rule() {
       return 0
     fi
   else
-    selected="$(select_pbr_rule)" || return 0
+    selected="$(select_pbr_rule "删除")" || return 0
   fi
   IFS=$'\t' read -r line_no cidr table _source <<<"$selected"
   prompt_yes_no "确认删除 PBR 规则 ${cidr} -> ${table}？" "N" || return 0
@@ -9397,6 +9500,126 @@ delete_pbr_rule() {
   else
     warn "PBR 规则已删除，但重新应用失败。请稍后执行 PBR -> 应用 PBR。"
   fi
+}
+
+pbr_edit_rule() {
+  need_root_unless_dry_run
+  local selection="${1:-}" selected rc line_no cidr table source iface enabled remark raw_line
+  local old_cidr old_group old_table old_source_type old_source_name old_source_host old_iface old_enabled old_remark
+  local new_cidr new_table new_group new_iface new_enabled new_remark new_line release_global_lock=0
+  local convert_to_static=0 forward_source=0 count
+  count="$(pbr_rules_count)"
+  if (( count == 0 )); then
+    warn "当前没有 PBR 规则可修改。"
+    return 0
+  fi
+  if [[ -n "$selection" ]]; then
+    if selected="$(resolve_pbr_rule_selection "$selection")"; then
+      :
+    else
+      rc=$?
+      warn_pbr_selection_error "$rc" "$selection"
+      return 0
+    fi
+  else
+    selected="$(select_pbr_rule "修改")" || return 0
+  fi
+  IFS=$'\t' read -r line_no cidr table source iface enabled remark <<<"$selected"
+  raw_line="$(sed -n "${line_no}p" "$PBR_STATIC_CONF" 2>/dev/null || true)"
+  if ! pbr_parse_rule_line "$raw_line"; then
+    warn "PBR 规则解析失败，已取消修改：${raw_line}"
+    return 1
+  fi
+  old_cidr="$PBR_RULE_CIDR"
+  old_group="$PBR_RULE_GROUP"
+  old_table="$PBR_RULE_TABLE"
+  old_source_type="$PBR_RULE_SOURCE_TYPE"
+  old_source_name="$PBR_RULE_SOURCE_NAME"
+  old_source_host="$PBR_RULE_SOURCE_HOST"
+  old_iface="$PBR_RULE_IFACE"
+  old_enabled="$PBR_RULE_ENABLED"
+  old_remark="$PBR_RULE_REMARK"
+
+  echo
+  echo "当前 PBR 规则："
+  echo "目标网段: ${old_cidr}"
+  echo "出口接口: ${old_iface:-"-"}"
+  echo "路由表: ${old_table}"
+  echo "来源: ${PBR_RULE_SOURCE_DISPLAY}"
+  echo "启用: ${old_enabled}"
+  echo "备注: ${old_remark:-"-"}"
+
+  if [[ "$old_source_type" == "forward" ]]; then
+    forward_source=1
+    warn "这是从转发目标生成的 PBR。"
+    info "目标 IP 会跟随转发目标解析自动同步。"
+    info "如需修改后端域名、端口、出口接口或路由表，建议进入“转发目标管理 -> 修改转发目标”。"
+    if prompt_yes_no "是否转为静态 PBR？" "N"; then
+      prompt_yes_no "确认转为静态 PBR，并停止跟随转发目标同步？" "N" || return 0
+      convert_to_static=1
+    else
+      warn "forward 来源 PBR 默认不允许直接修改目标 CIDR。"
+      info "可修改备注，但可能在后续同步时被覆盖。"
+      new_remark="$(prompt_value "备注" "$old_remark")"
+      new_line="$(pbr_render_rule_line "$old_cidr" "$old_group" "forward" "$old_source_name" "$old_source_host" "$old_iface" "$old_enabled" "$new_remark")"
+      confirm_summary "修改 forward 来源 PBR 备注" "目标：${old_cidr}\n路由表：${old_table}\n来源：forward:${old_source_name} ${old_source_host}\n备注：${new_remark:-"-"}" || return 0
+      if [[ -z "$LEIKWAN_GLOBAL_LOCK_TOKEN" ]]; then
+        global_lock_acquire || return 1
+        release_global_lock=1
+      fi
+      auto_snapshot_or_confirm "edit-pbr-rule" || { (( release_global_lock == 1 )) && global_lock_release; return 0; }
+      pbr_write_rule_line "$line_no" "$new_line"
+      (( release_global_lock == 1 )) && global_lock_release
+      ok "PBR 规则已修改。"
+      info "修改已保存。请执行“应用 PBR”使规则生效。"
+      return 0
+    fi
+  fi
+
+  if (( forward_source == 0 )) && [[ "$old_source_type" != "static" ]]; then
+    warn "这是由 ${PBR_RULE_SOURCE_DISPLAY} 生成的 PBR。"
+    info "请使用对应管理入口修改，或删除后新增静态 PBR。"
+    return 0
+  fi
+
+  if (( forward_source == 1 && convert_to_static == 1 )); then
+    new_cidr="$old_cidr"
+    new_table="$old_table"
+    new_iface="$old_iface"
+  else
+    while true; do
+      new_cidr="$(prompt_value "目标 CIDR/IP" "$old_cidr")"
+      new_cidr="$(normalize_ipv4_cidr "$new_cidr" 2>/dev/null || true)"
+      [[ -n "$new_cidr" ]] && break
+      warn "目标 IP/CIDR 无效，请重新输入。"
+    done
+    new_table="$(prompt_value "路由表 route_table" "$old_table")"
+    new_table="$(normalize_menu_choice "$new_table")"
+    [[ -n "$new_table" ]] || new_table="$old_table"
+    new_iface="$(prompt_value "出口接口 out_iface" "$old_iface")"
+  fi
+  new_group="${new_table#T_}"
+  [[ -n "$new_group" ]] || new_group="$old_group"
+  new_iface="$(normalize_menu_choice "$new_iface")"
+  new_remark="$(prompt_value "备注" "$old_remark")"
+  new_enabled="$(prompt_enabled_value "是否启用 PBR 规则？" "$old_enabled")"
+  new_line="$(pbr_render_rule_line "$new_cidr" "$new_group" "static" "" "" "$new_iface" "$new_enabled" "$new_remark")"
+
+  confirm_summary "修改 PBR 规则摘要" "目标：${old_cidr} -> ${new_cidr}\n出口接口：${old_iface:-"-"} -> ${new_iface:-"-"}\n路由表：${old_table} -> T_${new_group}\n来源：${source} -> static\n启用：${old_enabled} -> ${new_enabled}\n备注：${old_remark:-"-"} -> ${new_remark:-"-"}" || return 0
+  if [[ -z "$LEIKWAN_GLOBAL_LOCK_TOKEN" ]]; then
+    global_lock_acquire || return 1
+    release_global_lock=1
+  fi
+  auto_snapshot_or_confirm "edit-pbr-rule" || { (( release_global_lock == 1 )) && global_lock_release; return 0; }
+  pbr_write_rule_line "$line_no" "$new_line"
+  (( release_global_lock == 1 )) && global_lock_release
+  ok "PBR 规则已修改。"
+  info "修改已保存。请执行“应用 PBR”使规则生效。"
+  info "可返回“IPv4 PBR 出口策略”选择“应用 PBR”。"
+}
+
+pbr_edit_rule_menu() {
+  pbr_edit_rule "${1:-}"
 }
 
 pbr_rule_key_exists() {
@@ -13899,25 +14122,31 @@ forwards_menu() {
   done
 }
 
+print_pbr_menu_options() {
+  print_menu_header "IPv4 多出口策略路由 / PBR"
+  echo "1. 添加静态 PBR"
+  echo "2. 从现有转发目标添加 PBR"
+  echo "3. 修改 PBR 规则"
+  echo "4. 删除 PBR 规则"
+  echo "5. 应用 PBR"
+  echo "6. 查看 PBR"
+  echo "7. 域名 PBR 管理"
+  echo "0. 返回"
+}
+
 pbr_menu() {
   local choice
   while true; do
-    print_menu_header "IPv4 多出口策略路由 / PBR"
-    echo "1. 添加静态 PBR"
-    echo "2. 从现有转发目标添加 PBR"
-    echo "3. 删除 PBR 规则"
-    echo "4. 应用 PBR"
-    echo "5. 查看 PBR"
-    echo "6. 域名 PBR 管理"
-    echo "0. 返回"
+    print_pbr_menu_options
     choice="$(prompt_menu_choice "请选择：")"
     case "$choice" in
       1) run_menu_action_pause pbr_add_static ;;
       2) run_menu_action_pause pbr_add_from_forward ;;
-      3) run_menu_action_pause delete_pbr_rule ;;
-      4) run_menu_action_pause pbr_apply ;;
-      5) run_menu_action_pause pbr_show ;;
-      6) pbr_domain_menu ;;
+      3) run_menu_action_pause pbr_edit_rule_menu ;;
+      4) run_menu_action_pause delete_pbr_rule ;;
+      5) run_menu_action_pause pbr_apply ;;
+      6) run_menu_action_pause pbr_show ;;
+      7) pbr_domain_menu ;;
       0) return 0 ;;
       "") menu_input_required ;;
       *) menu_invalid_choice ;;
@@ -14675,16 +14904,17 @@ main() {
       ;;
     pbr)
       case "${2:-}" in
-        delete) delete_pbr_rule "${3:-}" ;;
-        apply) pbr_apply ;;
-        show|list) pbr_show ;;
-        sync-from-forwards) shift 2; pbr_sync_from_forwards "$@" ;;
+        edit) pbr_edit_rule "${3:-}" || exit $? ;;
+        delete) delete_pbr_rule "${3:-}" || exit $? ;;
+        apply) pbr_apply || exit $? ;;
+        show|list) pbr_show || exit $? ;;
+        sync-from-forwards) shift 2; pbr_sync_from_forwards "$@" || exit $? ;;
         domain)
           case "${3:-}" in
-            add) pbr_domain_add ;;
-            list|show) pbr_domain_list ;;
-            delete) pbr_domain_delete ;;
-            sync) shift 3; pbr_domain_sync "$@" ;;
+            add) pbr_domain_add || exit $? ;;
+            list|show) pbr_domain_list || exit $? ;;
+            delete) pbr_domain_delete || exit $? ;;
+            sync) shift 3; pbr_domain_sync "$@" || exit $? ;;
             *) fail "未知 pbr domain 子命令：${3:-}"; print_help; exit 1 ;;
           esac
           ;;

@@ -59,6 +59,7 @@ lq forward add
 lq forward list
 lq forward apply-relay --auto-fix-route
 lq pbr show
+lq pbr edit
 lq pbr sync-from-forwards
 lq pbr domain add
 lq pbr domain list
