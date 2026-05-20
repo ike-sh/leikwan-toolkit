@@ -44,6 +44,15 @@ bash tests/final-readme-regression.sh
 section "entry port pool message regression"
 bash tests/entry-port-pool-message-regression.sh
 
+section "PBR forward domain resolution regression"
+bash tests/pbr-forward-domain-resolution-regression.sh
+
+section "forward domain resolution regression"
+bash tests/forward-domain-resolution-regression.sh
+
+section "domain PBR message regression"
+bash tests/domain-pbr-message-regression.sh
+
 section "system network menu regression"
 bash tests/system-network-menu-regression.sh
 

@@ -41,6 +41,7 @@ IPv4 多出口策略路由 / PBR
 ## 从转发目标添加 PBR
 
 当 forward 有 `route_table` 时，可以用当前 resolved IP 生成 `forward:<name>` 来源 PBR。
+在转发 / PBR 场景中，如果多个 DNS 解析器返回不同 IPv4，脚本会优先选择出现次数最多且至少出现两次的多数结果；没有多数结果时才回退到 `DNS_RESOLVE_STRATEGY`。这不会改变 DDNS 全局检测策略。
 
 同步命令：
 

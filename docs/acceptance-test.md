@@ -1,6 +1,6 @@
 # 验收清单
 
-本页用于 Leikwan Toolkit 1.4.12 LTS 正式版验收。
+本页用于 Leikwan Toolkit 1.4.13 LTS 正式版验收。
 
 ## 版本
 
@@ -12,8 +12,8 @@ bash leikwan-toolkit.sh --version
 期望：
 
 ```text
-TOOL_VERSION="1.4.12"
-leikwan-toolkit 1.4.12 LTS
+TOOL_VERSION="1.4.13"
+leikwan-toolkit 1.4.13 LTS
 ```
 
 ## 打包
@@ -30,8 +30,8 @@ bash scripts/package-release.sh
 期望生成：
 
 ```text
-dist/leikwan-toolkit-1.4.12.tar.gz
-dist/leikwan-toolkit-1.4.12.tar.gz.sha256
+dist/leikwan-toolkit-1.4.13.tar.gz
+dist/leikwan-toolkit-1.4.13.tar.gz.sha256
 ```
 
 release 包不得包含旧入口文件：
@@ -47,6 +47,9 @@ bash tests/render-regression.sh
 bash tests/final-menu-regression.sh
 bash tests/final-readme-regression.sh
 bash tests/entry-port-pool-message-regression.sh
+bash tests/pbr-forward-domain-resolution-regression.sh
+bash tests/forward-domain-resolution-regression.sh
+bash tests/domain-pbr-message-regression.sh
 bash tests/role-detection-regression.sh
 bash tests/doctor-reset-regression.sh
 bash tests/compact-output-regression.sh

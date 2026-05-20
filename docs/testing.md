@@ -21,6 +21,9 @@ bash tests/render-regression.sh
 bash tests/final-menu-regression.sh
 bash tests/final-readme-regression.sh
 bash tests/entry-port-pool-message-regression.sh
+bash tests/pbr-forward-domain-resolution-regression.sh
+bash tests/forward-domain-resolution-regression.sh
+bash tests/domain-pbr-message-regression.sh
 bash tests/system-network-menu-regression.sh
 bash tests/quickstart-network-prepare-regression.sh
 bash tests/ipv4-prefer-regression.sh
@@ -70,6 +73,9 @@ bash tests/render-regression.sh
 bash tests/final-menu-regression.sh
 bash tests/final-readme-regression.sh
 bash tests/entry-port-pool-message-regression.sh
+bash tests/pbr-forward-domain-resolution-regression.sh
+bash tests/forward-domain-resolution-regression.sh
+bash tests/domain-pbr-message-regression.sh
 bash tests/system-network-menu-regression.sh
 bash tests/quickstart-network-prepare-regression.sh
 bash tests/ipv4-prefer-regression.sh
@@ -106,7 +112,7 @@ bash tests/redaction-regression.sh
 - `smoke.sh`：基础语法、版本、帮助和关键 CLI 参数识别。
 - `cli-regression.sh`：只读 CLI 在空状态目录下不触发全局 trap。
 - `render-regression.sh`：模拟 TSV，检查表格、紧凑渲染和核心菜单渲染。
-- `final-menu-regression.sh`：检查 1.4.12 LTS 主菜单只暴露 6 个核心入口，DDNS 和高级维护菜单保持收敛。
+- `final-menu-regression.sh`：检查 1.4.13 LTS 主菜单只暴露 6 个核心入口，DDNS 和高级维护菜单保持收敛。
 - `final-readme-regression.sh`：检查 README 标明 LTS、域名解析变化自动刷新、默认不修改 DNS 记录和常用命令。
 - `system-network-menu-regression.sh`：检查高级维护挂载“系统网络优化”及 IPv4 / DNS / IPv6 / BBR / nftables 子菜单。
 - `quickstart-network-prepare-regression.sh`：检查快速组网自动执行 IPv4 优先和 `8.8.8.8` / `1.1.1.1` 系统 DNS 预处理。

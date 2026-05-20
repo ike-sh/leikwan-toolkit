@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-TOOL_VERSION="1.4.12"
+TOOL_VERSION="1.4.13"
 RELEASE_CHANNEL="LTS"
 PROJECT_NAME="leikwan-toolkit"
 PROJECT_TITLE="利群快速组网工具"
@@ -1747,6 +1747,97 @@ resolve_domain_ipv4_multi_value() {
   printf '%s' "$RESOLVE_SELECTED_IP"
 }
 
+resolve_domain_ipv4_for_forward_context() {
+  local host="$1" context="${2:-转发/PBR}" configured_servers source ip selected_ip="" selected_source=""
+  local result_text="" any_success=0 unique_ips="" split_count=0 best_ip="" best_count=0 current_ip current_count tie_count=0
+  local i line
+  local -a sources ips labels lines
+  RESOLVE_SELECTED_IP=""
+  RESOLVE_SELECTED_SOURCE=""
+  RESOLVE_ALL_RESULTS=""
+  RESOLVE_SPLIT_DETECTED=false
+  RESOLVE_INCOMPLETE_DETECTED=false
+  if is_ipv4 "$host"; then
+    RESOLVE_SELECTED_IP="$host"
+    RESOLVE_SELECTED_SOURCE="literal"
+    RESOLVE_ALL_RESULTS="literal -> ${host}"
+    return 0
+  fi
+  if ! command -v dig >/dev/null 2>&1; then
+    dnsutils_auto_install "forward-pbr" "false" "ddns" || true
+  fi
+  configured_servers="$(ddns_config_value DNS_RESOLVE_SERVERS "$DNS_RESOLVE_SERVERS_DEFAULT")"
+  while IFS= read -r source; do
+    [[ -n "$source" ]] && sources+=("$source")
+  done < <(dns_resolve_servers "$configured_servers")
+  sources+=("system")
+  for source in "${sources[@]}"; do
+    [[ -n "$source" ]] || continue
+    if ip="$(dns_resolve_one_ipv4 "$host" "$source")"; then
+      any_success=1
+      ips+=("$ip")
+      labels+=("$source")
+      lines+=("${source} -> ${ip}")
+      result_text="${result_text:+${result_text};}${source} -> ${ip}"
+    else
+      lines+=("${source} -> fail")
+      result_text="${result_text:+${result_text};}${source} -> fail"
+    fi
+  done
+  (( any_success == 1 )) || return 1
+  for current_ip in "${ips[@]}"; do
+    current_count=0
+    for ip in "${ips[@]}"; do
+      [[ "$ip" == "$current_ip" ]] && current_count=$((current_count + 1))
+    done
+    if (( current_count > best_count )); then
+      best_count="$current_count"
+      best_ip="$current_ip"
+    fi
+  done
+  for current_ip in "${ips[@]}"; do
+    if [[ ";${unique_ips};" != *";${current_ip};"* ]]; then
+      unique_ips="${unique_ips:+${unique_ips};}${current_ip}"
+      split_count=$((split_count + 1))
+      current_count=0
+      for ip in "${ips[@]}"; do
+        [[ "$ip" == "$current_ip" ]] && current_count=$((current_count + 1))
+      done
+      (( current_count == best_count )) && tie_count=$((tie_count + 1))
+    fi
+  done
+  if (( best_count >= 2 && tie_count == 1 )); then
+    selected_ip="$best_ip"
+    for i in "${!ips[@]}"; do
+      if [[ "${ips[$i]}" == "$selected_ip" ]]; then
+        selected_source="${labels[$i]}"
+        break
+      fi
+    done
+    RESOLVE_SELECTED_IP="$selected_ip"
+    RESOLVE_SELECTED_SOURCE="$selected_source"
+    RESOLVE_ALL_RESULTS="$(dns_result_escape "$result_text")"
+    if (( split_count > 1 )); then
+      RESOLVE_SPLIT_DETECTED=true
+      warn "域名 ${host} DNS 解析结果不一致："
+      for line in "${lines[@]}"; do
+        warn "  ${line}"
+      done
+      info "${context} 场景按多数结果选择：${selected_ip}"
+    fi
+    return 0
+  fi
+  resolve_domain_ipv4_multi "$host"
+}
+
+resolve_domain_ipv4_for_forward() {
+  resolve_domain_ipv4_for_forward_context "$1" "转发/PBR"
+}
+
+resolve_domain_ipv4_for_pbr() {
+  resolve_domain_ipv4_for_forward_context "$1" "转发/PBR"
+}
+
 easytier_validate_help() {
   "$EASYTIER_CORE_BIN" --help >/dev/null 2>&1 || return 1
   "$EASYTIER_CLI_BIN" --help >/dev/null 2>&1 || return 1
@@ -2429,11 +2520,11 @@ get_latest_release_version() {
   [[ -n "$version" ]] && { printf '%s' "$version"; return 0; }
   if [[ "$mode" == "fast" ]]; then
     dl_warn "无法快速获取最新版本。"
-    dl_info "可直接选择“更新到最新版本”，或设置 LEIKWAN_TARGET_VERSION=1.4.12 后重试。"
+    dl_info "可直接选择“更新到最新版本”，或设置 LEIKWAN_TARGET_VERSION=1.4.13 后重试。"
     dl_info "如需完整探测，可设置 LEIKWAN_GITHUB_METADATA_MODE=full。"
   else
     dl_warn "无法获取最新版本。"
-    dl_info "可设置 LEIKWAN_TARGET_VERSION=1.4.12 后重试，或检查网络 / 镜像配置。"
+    dl_info "可设置 LEIKWAN_TARGET_VERSION=1.4.13 后重试，或检查网络 / 镜像配置。"
   fi
   return 1
 }
@@ -2654,7 +2745,7 @@ update_check() {
   latest_version="$(get_latest_release_version)" || return 1
   if [[ -z "$latest_version" ]]; then
     warn "无法快速获取最新版本。"
-    info "可直接选择“更新到最新版本”，或设置 LEIKWAN_TARGET_VERSION=1.4.12 后重试。"
+    info "可直接选择“更新到最新版本”，或设置 LEIKWAN_TARGET_VERSION=1.4.13 后重试。"
     info "如需完整探测，可设置 LEIKWAN_GITHUB_METADATA_MODE=full。"
     return 1
   fi
@@ -2776,12 +2867,12 @@ update_run() {
       [[ -n "$latest_version" ]] || { fail "LEIKWAN_TARGET_VERSION 无效：${LEIKWAN_TARGET_VERSION}"; exit 1; }
       tag="v${latest_version}"
     else
-      latest="$(update_latest_release)" || { dl_error "无法确定最新版本，已取消更新。"; dl_info "可设置 LEIKWAN_TARGET_VERSION=1.4.12 后重试。"; exit 1; }
+      latest="$(update_latest_release)" || { dl_error "无法确定最新版本，已取消更新。"; dl_info "可设置 LEIKWAN_TARGET_VERSION=1.4.13 后重试。"; exit 1; }
       IFS=$'\t' read -r tag latest_version <<<"$latest"
     fi
     if [[ -z "${latest_version:-}" ]] || ! release_version_from_tag "$latest_version" >/dev/null 2>&1; then
       dl_error "无法确定最新版本，已取消更新。"
-      dl_info "可设置 LEIKWAN_TARGET_VERSION=1.4.12 后重试。"
+      dl_info "可设置 LEIKWAN_TARGET_VERSION=1.4.13 后重试。"
       exit 1
     fi
     if [[ -z "${tag:-}" ]] || ! release_version_from_tag "$tag" >/dev/null 2>&1; then
@@ -5591,7 +5682,7 @@ add_forward() {
   IFS=$'\t' read -r out_iface route_table <<<"$route_defaults"
   enabled="$(prompt_enabled_value "是否启用转发目标？" "true")"
   comment="$(prompt_value "备注" "${name}-target")"
-  if resolve_domain_ipv4_multi "$target_host"; then
+  if resolve_domain_ipv4_for_forward "$target_host"; then
     target_ip="$RESOLVE_SELECTED_IP"
   else
     target_ip=""
@@ -5791,7 +5882,7 @@ resolve_forwards() {
   content=$'# name\tentry_port\ttarget_host\tresolved_ip\ttarget_port\tout_iface\troute_table\tenabled\tlast_resolved_at\tcomment'
   while IFS=$'\034' read -r name entry_port target_host target_port out_iface route_table enabled comment; do
     old_ip="$(last_resolved_ip_for_forward "$name")"
-    if resolve_domain_ipv4_multi "$target_host"; then
+    if resolve_domain_ipv4_for_forward "$target_host"; then
       target_ip="$RESOLVE_SELECTED_IP"
     else
       target_ip=""
@@ -8892,7 +8983,7 @@ pbr_add_from_forward() {
   row="$(forwards_rows | awk -F'\t' -v n="$name" '$1==n {print; exit}')"
   [[ -n "$row" ]] || { warn "转发目标不存在：${name}"; return 0; }
   target_host="$(awk -F'\t' '{print $3}' <<<"$row")"
-  if resolve_domain_ipv4_multi "$target_host"; then
+  if resolve_domain_ipv4_for_pbr "$target_host"; then
     target_ip="$RESOLVE_SELECTED_IP"
   else
     target_ip=""
@@ -9110,6 +9201,7 @@ display_pbr_domains() {
 pbr_domain_list() {
   if ! pbr_domain_rows | awk 'NR==1 {found=1} END{exit !found}'; then
     info "当前没有域名 PBR。"
+    info "从转发目标添加的 PBR 会显示在“查看 PBR”中，来源形如 forward:name domain。"
     return 0
   fi
   display_pbr_domains
