@@ -1,4 +1,4 @@
-﻿# legacy 清理
+# legacy 清理
 
 Leikwan Toolkit 1.4.0 主流程只使用 EasyTier、nftables、IPv4 PBR、DDNS 刷新和 MSS clamp。旧版本残留清理入口：
 

@@ -1,4 +1,4 @@
-﻿# EasyTier 配对码
+# EasyTier 配对码
 
 配对码用于在 B 利群主机和 A 公网入口之间传递 EasyTier network name、network secret、入口建议值和 ENTRY 返回信息。配对码包含敏感信息，不应公开。
 

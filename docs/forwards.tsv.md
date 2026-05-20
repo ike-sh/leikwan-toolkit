@@ -1,4 +1,4 @@
-﻿# forwards.tsv
+# forwards.tsv
 
 转发目标是任意 TCP 或 UDP 后端。脚本只需要知道入口端口和后端地址。
 

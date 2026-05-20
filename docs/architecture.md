@@ -1,4 +1,4 @@
-﻿# 架构说明
+# 架构说明
 
 Leikwan Toolkit 1.4.0 使用 EasyTier + nftables 构建三段式 TCP/UDP 转发链路。
 

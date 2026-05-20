@@ -1,4 +1,4 @@
-﻿# nftables 转发
+# nftables 转发
 
 Leikwan Toolkit 1.4.0 只管理本项目自己的表：
 

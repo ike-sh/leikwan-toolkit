@@ -1,5 +1,10 @@
 # Release Notes
 
+## 1.4.15 LTS
+
+- `lq update` 不带子命令时等价于 `lq update run`，保留 `check` / `run` / `status` / `rollback` 原有行为。
+- 修复确认提示默认值处理，`[Y/n]` 直接回车按 yes，`[y/N]` 直接回车按 no，`Y/y/N/n` 均可识别。
+
 ## 1.4.14 LTS
 
 - 修复 `PBR -> 应用 PBR` 中 forward 来源规则仍使用通用 `first-success` resolver 的问题，统一改用转发 / PBR majority resolver。

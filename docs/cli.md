@@ -78,11 +78,14 @@ lq output show
 lq output json
 lq output html
 lq output qr
+lq update
 lq update check
 lq update run
 lq update status
 lq update rollback
 ```
+
+`lq update` 等价于 `lq update run`，用于直接进入更新到最新版本流程。
 
 ## 卸载
 
