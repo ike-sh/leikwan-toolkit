@@ -1,6 +1,8 @@
 # Leikwan Toolkit
 
-Leikwan Toolkit `1.4.21 LTS` is the Shell LTS line for local TCP/UDP forwarding, EasyTier relay / entry setup, nftables, IPv4 PBR, snapshots, status, doctor, and DDNS domain-resolution refresh.
+Leikwan Toolkit `1.4.22 LTS` is the Shell LTS line for local TCP/UDP forwarding, EasyTier relay / entry setup, nftables, IPv4 PBR, snapshots, status, doctor, and DDNS domain-resolution refresh.
+
+**v1.4.22**：维护性收尾——回归测试跟随 `TOOL_VERSION`、单条转发码标记兼容、导入后 `validate_forwards_tsv`、自更新提示使用当前版本号。
 
 **v1.4.21**：bundle 导入拒绝重复端口/名称、非法 `enabled` 与 `RULE_COUNT` 不一致；Relay IP 校验不再误用脚本默认 IP；利群主机侧跳过端口池误报；bundle→端口池切换需确认。
 
@@ -53,7 +55,7 @@ lq forward apply-relay --auto-fix-route
 
 ```bash
 lq --version
-# leikwan-toolkit 1.4.21 LTS
+# leikwan-toolkit 1.4.22 LTS
 ```
 
 ## 快速组网系统网络预处理
@@ -136,11 +138,11 @@ PUBLIC_IP_CHECK_URLS=
 
 ```bash
 bash scripts/build-release.sh
-# 或指定版本
-VERSION=1.4.17 bash scripts/build-release.sh
+# 默认读取 leikwan-toolkit.sh 中的 TOOL_VERSION；也可显式指定：
+# VERSION=1.4.22 bash scripts/build-release.sh
 ```
 
-产物写入 `dist/leikwan-toolkit-1.4.17.tar.gz` 和对应 `.sha256`，只包含 Shell LTS 需要的 VERSION、README、主脚本、scripts、docs、tests 和可选 LICENSE。`.sha256` 文件使用 `hash  leikwan-toolkit-1.4.17.tar.gz` 的 basename 格式。`VERSION` 用于 `lq update check` 轻量检查最新版本，发布时必须与 `TOOL_VERSION` 保持一致。
+产物写入 `dist/leikwan-toolkit-<VERSION>.tar.gz` 和对应 `.sha256`（例如 `dist/leikwan-toolkit-1.4.22.tar.gz`），只包含 Shell LTS 需要的 VERSION、README、主脚本、scripts、docs、tests 和可选 LICENSE。`.sha256` 文件使用 `hash  leikwan-toolkit-<VERSION>.tar.gz` 的 basename 格式。`VERSION` 用于 `lq update check` 轻量检查最新版本，发布时必须与 `TOOL_VERSION` 保持一致。
 
 ## 文档
 

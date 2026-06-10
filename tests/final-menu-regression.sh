@@ -21,7 +21,7 @@ mkdir -p "$LEIKWAN_RUN_DIR"
 source "$ROOT_DIR/leikwan-toolkit.sh"
 
 main_out="$(print_main_menu_options)"
-grep -q "Leikwan Toolkit 1.4.17 LTS" <<<"$main_out"
+grep -q "Leikwan Toolkit ${TOOL_VERSION} LTS" <<<"$main_out"
 grep -q "1." <<<"$main_out"
 grep -q "2." <<<"$main_out"
 grep -q "3." <<<"$main_out"

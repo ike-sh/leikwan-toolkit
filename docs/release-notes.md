@@ -1,5 +1,31 @@
 # Release Notes
 
+## 1.4.22 LTS
+
+- 回归测试（smoke / final-menu / final-readme）改为跟随 `TOOL_VERSION`，避免版本漂移导致 `verify-release` 失败。
+- bundle / 单条转发导入后增加 `validate_forwards_tsv` 双保险。
+- 单条 `FORWARD_VERSION=0.4` 导出/导入标记为兼容路径，引导使用 `lq forward bundle-export`。
+- 自更新失败提示中的示例版本号改为当前 `TOOL_VERSION`。
+
+## 1.4.21 LTS
+
+- bundle 导入拒绝重复 `entry_port` / 名称、非法 `enabled`、`RULE_COUNT` 不一致。
+- Relay IP 交叉校验不再误用脚本默认 `10.198.1.1`；本地无 Relay IP 时强制二次确认。
+- 利群主机侧 `warn_if_forward_port_outside_expose` 跳过默认端口池误报。
+- `entry expose-range` 覆盖 bundle 模式前需确认。
+
+## 1.4.20 LTS
+
+- bundle 模式下端口池警告修复；接入码 `target_host` / `comment` 校验与消毒。
+
+## 1.4.19 LTS
+
+- bundle 导入 `RELAY_ET_IP` 交叉校验；新增 bundle 回归测试。
+
+## 1.4.18 LTS
+
+- B 侧 `LEIKWAN_FORWARD_BUNDLE` 聚合接入码；A 侧按端口逐条 DNAT（推荐主链路）。
+
 ## 1.4.17 LTS
 
 - PBR 菜单新增“修改 PBR 规则”，静态 PBR 可交互修改 CIDR、出口接口元数据、路由表、备注和启用状态。

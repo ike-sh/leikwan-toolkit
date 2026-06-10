@@ -1,6 +1,6 @@
 # 验收清单
 
-本页用于 Leikwan Toolkit 1.4.17 LTS 正式版验收。
+本页用于 Leikwan Toolkit Shell LTS 正式版验收（版本号以 `TOOL_VERSION` / `VERSION` 为准）。
 
 ## 版本
 
@@ -9,11 +9,11 @@ grep -n '^TOOL_VERSION=' leikwan-toolkit.sh
 bash leikwan-toolkit.sh --version
 ```
 
-期望：
+期望（将 `X.Y.Z` 替换为当前 `VERSION` 文件内容）：
 
 ```text
-TOOL_VERSION="1.4.17"
-leikwan-toolkit 1.4.17 LTS
+TOOL_VERSION="X.Y.Z"
+leikwan-toolkit X.Y.Z LTS
 ```
 
 ## 打包
@@ -30,8 +30,8 @@ bash scripts/package-release.sh
 期望生成：
 
 ```text
-dist/leikwan-toolkit-1.4.17.tar.gz
-dist/leikwan-toolkit-1.4.17.tar.gz.sha256
+dist/leikwan-toolkit-X.Y.Z.tar.gz
+dist/leikwan-toolkit-X.Y.Z.tar.gz.sha256
 ```
 
 release 包不得包含旧入口文件：

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-TOOL_VERSION="1.4.21"
+TOOL_VERSION="1.4.22"
 RELEASE_CHANNEL="LTS"
 PROJECT_NAME="leikwan-toolkit"
 PROJECT_TITLE="利群快速组网工具"
@@ -2767,11 +2767,11 @@ get_latest_release_version() {
   [[ -n "$version" ]] && { printf '%s' "$version"; return 0; }
   if [[ "$mode" == "fast" ]]; then
     dl_warn "无法快速获取最新版本。"
-    dl_info "可直接选择“更新到最新版本”，或设置 LEIKWAN_TARGET_VERSION=1.4.17 后重试。"
+    dl_info "可直接选择“更新到最新版本”，或设置 LEIKWAN_TARGET_VERSION=${TOOL_VERSION} 后重试。"
     dl_info "如需完整探测，可设置 LEIKWAN_GITHUB_METADATA_MODE=full。"
   else
     dl_warn "无法获取最新版本。"
-    dl_info "可设置 LEIKWAN_TARGET_VERSION=1.4.17 后重试，或检查网络 / 镜像配置。"
+    dl_info "可设置 LEIKWAN_TARGET_VERSION=${TOOL_VERSION} 后重试，或检查网络 / 镜像配置。"
   fi
   return 1
 }
@@ -2992,7 +2992,7 @@ update_check() {
   latest_version="$(get_latest_release_version)" || return 1
   if [[ -z "$latest_version" ]]; then
     warn "无法快速获取最新版本。"
-    info "可直接选择“更新到最新版本”，或设置 LEIKWAN_TARGET_VERSION=1.4.17 后重试。"
+    info "可直接选择“更新到最新版本”，或设置 LEIKWAN_TARGET_VERSION=${TOOL_VERSION} 后重试。"
     info "如需完整探测，可设置 LEIKWAN_GITHUB_METADATA_MODE=full。"
     return 1
   fi
@@ -3114,12 +3114,12 @@ update_run() {
       [[ -n "$latest_version" ]] || { fail "LEIKWAN_TARGET_VERSION 无效：${LEIKWAN_TARGET_VERSION}"; exit 1; }
       tag="v${latest_version}"
     else
-      latest="$(update_latest_release)" || { dl_error "无法确定最新版本，已取消更新。"; dl_info "可设置 LEIKWAN_TARGET_VERSION=1.4.17 后重试。"; exit 1; }
+      latest="$(update_latest_release)" || { dl_error "无法确定最新版本，已取消更新。"; dl_info "可设置 LEIKWAN_TARGET_VERSION=${TOOL_VERSION} 后重试。"; exit 1; }
       IFS=$'\t' read -r tag latest_version <<<"$latest"
     fi
     if [[ -z "${latest_version:-}" ]] || ! release_version_from_tag "$latest_version" >/dev/null 2>&1; then
       dl_error "无法确定最新版本，已取消更新。"
-      dl_info "可设置 LEIKWAN_TARGET_VERSION=1.4.17 后重试。"
+      dl_info "可设置 LEIKWAN_TARGET_VERSION=${TOOL_VERSION} 后重试。"
       exit 1
     fi
     if [[ -z "${tag:-}" ]] || ! release_version_from_tag "$tag" >/dev/null 2>&1; then
@@ -5910,6 +5910,7 @@ read_forward_code() {
 
 export_forward_code_by_name() {
   local name="${1:-}" row entry_port target_host target_port out_iface route_table enabled comment file
+  warn "单条转发码（FORWARD_VERSION=0.4）为兼容保留；推荐使用 lq forward bundle-export 生成聚合接入码。"
   ensure_tsv_files
   if [[ -z "$name" ]]; then
     name="$(forwards_rows | awk -F'\t' 'NR==1{print $1}')"
@@ -6053,6 +6054,7 @@ import_forward_bundle_apply() {
   confirm_summary "导入公网入口转发接入码" "Relay EasyTier IP=${relay_ip}\n规则数=${n}\n${summary}动作：用接入码规则【替换】本机转发表，并按端口逐条 DNAT 到 Relay（无需再配端口池）。" || return 0
   ensure_tsv_files
   write_file "$FORWARDS_TSV" "$body" 600
+  validate_forwards_tsv || return 1
   write_file "$ENTRY_EXPOSE_ENV" "ENTRY_MODE=bundle
 RELAY_ET_IP=${relay_ip}
 ENABLED=true" 600
@@ -6231,6 +6233,7 @@ import_forwards_tsv() {
 import_forward_single_apply() {
   need_root_unless_dry_run
   local source="${1:-}" tmp name entry_port target_host target_port enabled comment row public_host relay_ip
+  warn "检测到单条转发码；推荐使用 LEIKWAN_FORWARD_BUNDLE 聚合接入码（lq forward bundle-export）。"
   tmp="$(mktemp)"
   read_forward_code "$tmp" "$source" || { rm -f "$tmp"; return 1; }
   require_env_fields "$tmp" FORWARD_VERSION NAME ENTRY_PORT TARGET_HOST TARGET_PORT ENABLED || { rm -f "$tmp"; return 1; }
@@ -6247,7 +6250,14 @@ import_forward_single_apply() {
   row="${name}"$'\t'"${entry_port}"$'\t'"${target_host}"$'\t'"${target_port}"$'\t\t\t'"${enabled}"$'\t'"${comment}"
   confirm_summary "导入公网入口转发摘要" "name=${name}\nentry_port=${entry_port}\ntarget=${target_host}:${target_port}\nenabled=${enabled}\n动作：写入本机 forwards.tsv，并按端口 DNAT 到 Relay。" || { rm -f "$tmp"; return 0; }
   replace_forward_row "$row"
-  relay_ip="$(current_relay_et_ip)"
+  validate_forwards_tsv || { rm -f "$tmp"; return 1; }
+  relay_ip="$(env_file_get "$NETWORK_ENV" EASYTIER_RELAY_ET_IP)"
+  [[ -n "$relay_ip" ]] || relay_ip="$(env_file_get "$NETWORK_ENV" RELAY_ET_IP)"
+  is_ipv4 "$relay_ip" || {
+    fail "无法确定 Relay EasyTier IP，请先完成快速组网步骤 3。"
+    rm -f "$tmp"
+    return 1
+  }
   write_file "$ENTRY_EXPOSE_ENV" "ENTRY_MODE=bundle
 RELAY_ET_IP=${relay_ip}
 ENABLED=true" 600
