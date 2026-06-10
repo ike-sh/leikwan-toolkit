@@ -1,6 +1,8 @@
 # Leikwan Toolkit
 
-Leikwan Toolkit `1.4.17 LTS` is the Shell LTS line for local TCP/UDP forwarding, EasyTier relay / entry setup, nftables, IPv4 PBR, snapshots, status, doctor, and DDNS domain-resolution refresh.
+Leikwan Toolkit `1.4.18 LTS` is the Shell LTS line for local TCP/UDP forwarding, EasyTier relay / entry setup, nftables, IPv4 PBR, snapshots, status, doctor, and DDNS domain-resolution refresh.
+
+**v1.4.18**：B 侧可生成 `LEIKWAN_FORWARD_BUNDLE` 转发接入码，A 侧粘贴后按端口逐条 DNAT 到 Relay（无需手填端口池）；`lq entry expose-range` 仍作兼容。
 
 当前仓库只维护 Shell LTS：
 
@@ -45,7 +47,7 @@ lq forward apply-relay --auto-fix-route
 
 ```bash
 lq --version
-# leikwan-toolkit 1.4.17 LTS
+# leikwan-toolkit 1.4.18 LTS
 ```
 
 ## 快速组网系统网络预处理

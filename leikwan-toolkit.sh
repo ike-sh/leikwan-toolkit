@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-TOOL_VERSION="1.4.17"
+TOOL_VERSION="1.4.18"
 RELEASE_CHANNEL="LTS"
 PROJECT_NAME="leikwan-toolkit"
 PROJECT_TITLE="利群快速组网工具"
@@ -913,6 +913,9 @@ ${PROJECT_NAME} $(tool_version_label)
   sudo bash leikwan-toolkit.sh forward edit [name]
   sudo bash leikwan-toolkit.sh forward delete [name]
   sudo bash leikwan-toolkit.sh forward list
+  sudo bash leikwan-toolkit.sh forward bundle-export
+  sudo bash leikwan-toolkit.sh forward import [pairing-file|-]
+  sudo bash leikwan-toolkit.sh entry import [pairing-file|-]
   sudo bash leikwan-toolkit.sh forward apply-relay
   sudo bash leikwan-toolkit.sh forward apply-relay --auto-fix-route
   sudo bash leikwan-toolkit.sh pbr delete 203.0.113.10/32
@@ -5069,7 +5072,7 @@ quick_deploy_relay_from_entry_pairing() {
   fi
   ok "已保存入口配置：${name}。"
   prompt_apply_relay_after_entry_change || { rm -f "$tmp"; return 1; }
-  info "下一步：在 A 公网入口配置端口池后，回到 B 利群主机添加后端转发目标。"
+  info "下一步：在 B 添加后端转发目标并生成转发接入码，A 粘贴接入码即可（无需手填端口池）。"
   rm -f "$tmp"
 }
 
@@ -5901,6 +5904,117 @@ export_forward_code_by_name() {
   print_forward_code "$file"
 }
 
+forward_bundle_code_path() {
+  printf '%s/forward-bundle.env' "$OUTPUT_DIR"
+}
+
+build_forward_bundle_rules_tsv() {
+  local filter="${1:-}"
+  forwards_rows | awk -F'\t' -v f="$filter" '
+    BEGIN { n=split(f, a, " "); for (i=1;i<=n;i++) if (a[i]!="") sel[a[i]]=1 }
+    $7=="true" {
+      if (f!="" && !($1 in sel)) next
+      printf "%s\t%s\t%s\t%s\t%s\t%s\n", $1, $2, $3, $4, $7, $8
+    }'
+}
+
+export_forward_bundle_code() {
+  need_root_unless_dry_run
+  ensure_tsv_files
+  local relay_ip rules count file b64 names
+  relay_ip="$(current_relay_et_ip)"
+  is_ipv4 "$relay_ip" || { fail "无法确定 Relay EasyTier IP：${relay_ip}"; return 1; }
+  if ! forwards_rows | awk -F'\t' '$7=="true"{f=1} END{exit !f}'; then
+    warn "当前没有启用的转发目标，无法生成接入码。请先在「转发目标管理」添加。"
+    return 0
+  fi
+  display_forwards
+  if prompt_yes_no "是否只选择部分转发生成接入码？（默认导出全部已启用）" "N"; then
+    names="$(prompt_value "输入要包含的转发名称（空格分隔）")"
+    rules="$(build_forward_bundle_rules_tsv "$names")"
+  else
+    rules="$(build_forward_bundle_rules_tsv "")"
+  fi
+  count="$(printf '%s\n' "$rules" | grep -c . || true)"
+  (( count > 0 )) || { warn "没有匹配的启用转发，未生成接入码。"; return 0; }
+  b64="$(printf '%s\n' "$rules" | base64 | tr -d '\n')"
+  file="$(forward_bundle_code_path)"
+  write_file "$file" "FORWARD_BUNDLE_VERSION=0.5
+RELAY_ET_IP=${relay_ip}
+RULE_COUNT=${count}
+RULES_B64=${b64}" 600
+  show_pairing_code_and_confirm "公网入口转发接入码（聚合 ${count} 条）" "-----BEGIN LEIKWAN FORWARD BUNDLE-----" "-----END LEIKWAN FORWARD BUNDLE-----" "$file" "LEIKWAN_FORWARD_BUNDLE_BASE64" "在 A 公网入口机选择「粘贴转发接入码并应用」。"
+}
+
+parse_forward_bundle_raw() {
+  local raw="$1" dest="$2" line payload
+  : >"$dest"
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    line="$(normalize_menu_choice "$line")"
+    [[ -n "$line" ]] || continue
+    case "$line" in
+      "-----BEGIN LEIKWAN FORWARD BUNDLE-----"|"-----END LEIKWAN FORWARD BUNDLE-----") continue ;;
+    esac
+    if [[ "$line" == LEIKWAN_FORWARD_BUNDLE_BASE64=* ]]; then
+      payload="${line#*=}"
+      decode_env_base64 "$payload" "$dest" "FORWARD_BUNDLE_VERSION" || { fail "一行接入码解码失败，请重新复制完整内容。"; return 1; }
+      return 0
+    fi
+    if [[ "$line" =~ ^[A-Za-z0-9+/]+={0,2}$ ]] && ((${#line} >= 30)); then
+      if decode_env_base64 "$line" "$dest" "FORWARD_BUNDLE_VERSION"; then
+        return 0
+      fi
+    fi
+    if [[ "$line" == *=* ]]; then
+      printf '%s\n' "$line" >>"$dest"
+    fi
+  done <"$raw"
+  [[ -s "$dest" ]] || { fail "没有读到有效 BUNDLE 接入码。"; return 1; }
+}
+
+import_forward_bundle_apply() {
+  need_root_unless_dry_run
+  local raw="$1" tmp relay_ip rules_b64 rules public_host
+  local body name entry_port target_host target_port enabled comment n=0 summary=""
+  tmp="$(mktemp)"
+  parse_forward_bundle_raw "$raw" "$tmp" || { rm -f "$tmp"; return 1; }
+  require_env_fields "$tmp" FORWARD_BUNDLE_VERSION RELAY_ET_IP RULES_B64 || { rm -f "$tmp"; return 1; }
+  [[ "$(env_file_get "$tmp" FORWARD_BUNDLE_VERSION)" == "0.5" ]] || { fail "FORWARD_BUNDLE_VERSION 不支持。"; rm -f "$tmp"; return 1; }
+  relay_ip="$(env_file_get "$tmp" RELAY_ET_IP)"
+  rules_b64="$(env_file_get "$tmp" RULES_B64)"
+  rm -f "$tmp"
+  is_ipv4 "$relay_ip" || { fail "接入码 RELAY_ET_IP 非法：${relay_ip}"; return 1; }
+  rules="$(printf '%s' "$rules_b64" | base64 -d 2>/dev/null)" || { fail "RULES_B64 解码失败，请重新复制接入码。"; return 1; }
+  [[ -n "$rules" ]] || { fail "接入码不含转发规则。"; return 1; }
+  body="$(printf '# name\tentry_port\ttarget_host\ttarget_port\tout_iface\troute_table\tenabled\tcomment')"
+  while IFS=$'\t' read -r name entry_port target_host target_port enabled comment || [[ -n "$name" ]]; do
+    [[ -n "$name" ]] || continue
+    name="$(safe_name "$name")"
+    is_port "$entry_port" || { fail "接入码含非法 entry_port：${entry_port}"; return 1; }
+    is_port "$target_port" || { fail "接入码含非法 target_port：${target_port}"; return 1; }
+    [[ "$enabled" == "true" || "$enabled" == "false" ]] || enabled="true"
+    body="${body}"$'\n'"${name}"$'\t'"${entry_port}"$'\t'"${target_host}"$'\t'"${target_port}"$'\t\t\t'"${enabled}"$'\t'"${comment}"
+    n=$((n + 1))
+    [[ "$enabled" == "true" ]] && summary="${summary}  ${name}: 端口 ${entry_port} → relay ${relay_ip}:${entry_port}（后端 ${target_host}:${target_port}）"$'\n'
+  done <<<"$rules"
+  (( n > 0 )) || { fail "接入码不含有效转发规则。"; return 1; }
+  confirm_summary "导入公网入口转发接入码" "Relay EasyTier IP=${relay_ip}\n规则数=${n}\n${summary}动作：用接入码规则【替换】本机转发表，并按端口逐条 DNAT 到 Relay（无需再配端口池）。" || return 0
+  ensure_tsv_files
+  write_file "$FORWARDS_TSV" "$body" 600
+  write_file "$ENTRY_EXPOSE_ENV" "ENTRY_MODE=bundle
+RELAY_ET_IP=${relay_ip}
+ENABLED=true" 600
+  apply_nft_rules "cloud-entry" || return 1
+  public_host="$(current_entry_public_host)"
+  echo
+  echo "公网入口已应用 ${n} 条转发："
+  while IFS=$'\t' read -r name entry_port target_host target_port _oi _rt enabled comment || [[ -n "$name" ]]; do
+    [[ -n "$name" && "$name" != \#* ]] || continue
+    [[ "$enabled" == "true" ]] || continue
+    echo "  ${public_host}:${entry_port} → relay ${relay_ip}:${entry_port} → ${target_host}:${target_port}"
+  done <<<"$body"
+}
+
 add_forward() {
   need_root_unless_dry_run
   install_packages iproute2 netcat-openbsd
@@ -6062,7 +6176,7 @@ import_forwards_tsv() {
   resolve_forwards || return 1
 }
 
-import_forward_code() {
+import_forward_single_apply() {
   need_root_unless_dry_run
   local source="${1:-}" tmp name entry_port target_host target_port enabled comment row public_host relay_ip
   tmp="$(mktemp)"
@@ -6079,25 +6193,56 @@ import_forward_code() {
   is_port "$target_port" || { fail "TARGET_PORT 非法：${target_port}"; rm -f "$tmp"; return 1; }
   [[ "$enabled" == "true" || "$enabled" == "false" ]] || { fail "ENABLED 必须是 true 或 false。"; rm -f "$tmp"; return 1; }
   row="${name}"$'\t'"${entry_port}"$'\t'"${target_host}"$'\t'"${target_port}"$'\t\t\t'"${enabled}"$'\t'"${comment}"
-  confirm_summary "导入公网入口转发摘要" "name=${name}\nentry_port=${entry_port}\ntarget=${target_host}:${target_port}\nenabled=${enabled}\n动作：写入本机 forwards.tsv，并应用 cloud-entry nftables。" || { rm -f "$tmp"; return 0; }
+  confirm_summary "导入公网入口转发摘要" "name=${name}\nentry_port=${entry_port}\ntarget=${target_host}:${target_port}\nenabled=${enabled}\n动作：写入本机 forwards.tsv，并按端口 DNAT 到 Relay。" || { rm -f "$tmp"; return 0; }
   replace_forward_row "$row"
-  if [[ ! -f "$ENTRY_EXPOSE_ENV" ]]; then
-    warn "未检测到入口端口池配置，将为 legacy import 临时暴露单端口 ${entry_port}。推荐改用 lq entry expose-range。"
-    write_file "$ENTRY_EXPOSE_ENV" "ENTRY_EXPOSE_START=${entry_port}
-ENTRY_EXPOSE_END=${entry_port}
-RELAY_ET_IP=$(current_relay_et_ip)
+  relay_ip="$(current_relay_et_ip)"
+  write_file "$ENTRY_EXPOSE_ENV" "ENTRY_MODE=bundle
+RELAY_ET_IP=${relay_ip}
 ENABLED=true" 600
-  elif ! port_in_range "$entry_port" "$(entry_expose_start)" "$(entry_expose_end)"; then
-    warn "导入端口 ${entry_port} 不在当前入口端口池 $(entry_expose_start)-$(entry_expose_end) 内；请运行 lq entry expose-range 调整端口池。"
-  fi
   apply_nft_rules "cloud-entry" || { rm -f "$tmp"; return 1; }
   generate_forward_outputs || true
   public_host="$(current_entry_public_host)"
-  relay_ip="$(current_relay_et_ip)"
   echo
   echo "公网入口："
   echo "${public_host}:${entry_port} -> EasyTier relay ${relay_ip}:${entry_port} -> ${target_host}:${target_port}"
   rm -f "$tmp"
+}
+
+import_forward_code() {
+  need_root_unless_dry_run
+  local source="${1:-}" raw line has_content=0 rc
+  raw="$(mktemp)"
+  if [[ -n "$source" ]]; then
+    if [[ "$source" == "-" ]]; then
+      cat >"$raw"
+    elif [[ -f "$source" ]]; then
+      cp -a "$source" "$raw"
+    else
+      printf '%s\n' "$source" >"$raw"
+    fi
+  else
+    echo "请粘贴从 B 利群主机复制的整段转发接入码（单条或聚合 BUNDLE 均可）。"
+    echo "看到 END 行会自动继续；如果只粘贴 KEY=VALUE 内容，请用空行结束。"
+    while IFS= read -r line; do
+      line="$(normalize_menu_choice "$line")"
+      if [[ -z "$line" ]]; then
+        (( has_content == 1 )) && break
+        continue
+      fi
+      has_content=1
+      printf '%s\n' "$line" >>"$raw"
+      [[ "$line" == "-----END LEIKWAN FORWARD-----" || "$line" == "-----END LEIKWAN FORWARD BUNDLE-----" ]] && break
+      [[ "$line" == LEIKWAN_FORWARD_BASE64=* || "$line" == LEIKWAN_FORWARD_BUNDLE_BASE64=* ]] && break
+      [[ "$line" =~ ^[A-Za-z0-9+/]+={0,2}$ ]] && ((${#line} >= 30)) && break
+    done
+  fi
+  if grep -q 'LEIKWAN FORWARD BUNDLE\|LEIKWAN_FORWARD_BUNDLE_BASE64\|FORWARD_BUNDLE_VERSION' "$raw"; then
+    import_forward_bundle_apply "$raw"; rc=$?
+  else
+    import_forward_single_apply "$raw"; rc=$?
+  fi
+  rm -f "$raw"
+  return $rc
 }
 
 export_forwards_tsv() {
@@ -8335,13 +8480,60 @@ configure_forward_sysctl() {
 }
 
 render_nft_cloud() {
-  local relay_ip start end mss
+  local relay_ip start end mss mode name entry_port target_host target_port _oi _rt enabled comment
   if [[ ! -f "$ENTRY_EXPOSE_ENV" ]]; then
-    fail "公网入口端口池未配置，请执行 lq entry expose-range。"
+    fail "公网入口未配置，请粘贴转发接入码（推荐），或执行 lq entry expose-range。"
     return 1
   fi
   mss="$(tcp_mss_clamp_value)"
   relay_ip="$(entry_expose_relay_ip)"
+  is_ipv4 "$relay_ip" || { fail "Relay EasyTier IP 非法：${relay_ip}"; return 1; }
+  mode="$(env_file_get "$ENTRY_EXPOSE_ENV" ENTRY_MODE)"
+  if [[ "$mode" == "bundle" ]]; then
+    if ! forwards_rows | awk -F'\t' '$7=="true"{f=1} END{exit !f}'; then
+      fail "接入码模式下没有启用的转发规则，请在 B 重新生成接入码并在 A 重新导入。"
+      return 1
+    fi
+    cat <<EOF
+table inet leikwan_forward {
+  chain prerouting {
+    type nat hook prerouting priority dstnat; policy accept;
+EOF
+    while IFS=$'\t' read -r name entry_port target_host target_port _oi _rt enabled comment; do
+      [[ "$enabled" == "true" ]] || continue
+      printf '    tcp dport %s dnat ip to %s\n' "$entry_port" "$relay_ip"
+      printf '    udp dport %s dnat ip to %s\n' "$entry_port" "$relay_ip"
+    done < <(forwards_rows)
+    cat <<EOF
+  }
+  chain forward {
+    type filter hook forward priority mangle; policy accept;
+    ct state established,related accept
+EOF
+    if mss_clamp_enabled; then
+      printf '    tcp flags syn tcp option maxseg size set %s\n' "$mss"
+    fi
+    while IFS=$'\t' read -r name entry_port target_host target_port _oi _rt enabled comment; do
+      [[ "$enabled" == "true" ]] || continue
+      printf '    ip daddr %s tcp dport %s accept\n' "$relay_ip" "$entry_port"
+      printf '    ip daddr %s udp dport %s accept\n' "$relay_ip" "$entry_port"
+    done < <(forwards_rows)
+    cat <<EOF
+  }
+  chain postrouting {
+    type nat hook postrouting priority srcnat; policy accept;
+EOF
+    while IFS=$'\t' read -r name entry_port target_host target_port _oi _rt enabled comment; do
+      [[ "$enabled" == "true" ]] || continue
+      printf '    ip daddr %s tcp dport %s masquerade\n' "$relay_ip" "$entry_port"
+      printf '    ip daddr %s udp dport %s masquerade\n' "$relay_ip" "$entry_port"
+    done < <(forwards_rows)
+    cat <<EOF
+  }
+}
+EOF
+    return 0
+  fi
   start="$(entry_expose_start)"
   end="$(entry_expose_end)"
   if ! is_port "$start" || ! is_port "$end" || (( start > end )); then
@@ -8834,20 +9026,27 @@ apply_nft_rules_impl() {
   configure_forward_sysctl || warn "IPv4 转发 sysctl 写入失败，请稍后手动检查。"
   case "$role" in
     cloud-entry)
-      [[ -f "$ENTRY_EXPOSE_ENV" ]] || { warn "公网入口端口池未配置，请执行 lq entry expose-range"; return 1; }
+      [[ -f "$ENTRY_EXPOSE_ENV" ]] || { warn "公网入口未配置：请粘贴转发接入码（推荐），或执行 lq entry expose-range"; return 1; }
       relay_ip="$(entry_expose_relay_ip)"
-      start="$(entry_expose_start)"
-      end="$(entry_expose_end)"
       if ! content="$(render_nft_cloud)"; then
         fail "公网入口 nftables 规则生成失败。"
         return 1
       fi
-      for proto in tcp udp; do
-        if ! grep -q "${proto} dport ${start}-${end} dnat ip to ${relay_ip}" <<<"$content"; then
-          fail "入口端口池 ${start}-${end} 未生成 ${proto^^} DNAT 规则。"
+      if [[ "$(env_file_get "$ENTRY_EXPOSE_ENV" ENTRY_MODE)" == "bundle" ]]; then
+        if ! grep -q "dnat ip to ${relay_ip}" <<<"$content"; then
+          fail "公网入口接入码模式未生成 DNAT 规则，请在 B 重新生成接入码并重新导入。"
           return 1
         fi
-      done
+      else
+        start="$(entry_expose_start)"
+        end="$(entry_expose_end)"
+        for proto in tcp udp; do
+          if ! grep -q "${proto} dport ${start}-${end} dnat ip to ${relay_ip}" <<<"$content"; then
+            fail "入口端口池 ${start}-${end} 未生成 ${proto^^} DNAT 规则。"
+            return 1
+          fi
+        done
+      fi
       ;;
 	    leikwan-relay)
 	      enabled_count="$(enabled_forwards_count)" || return 1
@@ -8898,7 +9097,11 @@ apply_nft_rules_impl() {
     if (( enabled_count == 0 )); then
       warn "已应用空 nftables 项目表；当前没有转发 DNAT 规则。"
     elif [[ "$role" == "cloud-entry" ]]; then
-      ok "公网入口端口池 nftables 规则已应用。"
+      if [[ "$(env_file_get "$ENTRY_EXPOSE_ENV" ENTRY_MODE)" == "bundle" ]]; then
+        ok "公网入口转发接入码 nftables 规则已应用。"
+      else
+        ok "公网入口端口池 nftables 规则已应用。"
+      fi
     else
       ok "nftables 转发规则已应用。"
     fi
@@ -10941,22 +11144,42 @@ doctor_cloud() {
   report_local_entry_ddns_status
   report_entry_ddns_updater_status
   if [[ -f "$ENTRY_EXPOSE_ENV" ]]; then
-    start="$(entry_expose_start)"
-    end="$(entry_expose_end)"
     relay_ip="$(entry_expose_relay_ip)"
-    report OK "入口端口池：${start}-${end} -> ${relay_ip}"
-    if nft_has_cloud_dnat tcp "$relay_ip" "${start}-${end}"; then
-      report OK "入口端口池 TCP DNAT 正常"
+    if [[ "$(env_file_get "$ENTRY_EXPOSE_ENV" ENTRY_MODE)" == "bundle" ]]; then
+      local bundle_count=0 name entry_port enabled
+      while IFS=$'\t' read -r name entry_port _target_host _target_port _out_iface _route_table enabled _comment; do
+        [[ "$enabled" == "true" ]] || continue
+        bundle_count=$((bundle_count + 1))
+        report OK "转发接入码：${name} ${entry_port} -> ${relay_ip}:${entry_port}"
+        if nft_has_cloud_dnat tcp "$relay_ip" "$entry_port"; then
+          report OK "${name} TCP DNAT 正常"
+        else
+          report FAIL "${name} TCP DNAT 缺失：应为 tcp dport ${entry_port} dnat ip to ${relay_ip}"
+        fi
+        if nft_has_cloud_dnat udp "$relay_ip" "$entry_port"; then
+          report OK "${name} UDP DNAT 正常"
+        else
+          report FAIL "${name} UDP DNAT 缺失：应为 udp dport ${entry_port} dnat ip to ${relay_ip}"
+        fi
+      done < <(forwards_rows)
+      (( bundle_count > 0 )) || report WARN "接入码模式已配置，但无启用的转发规则"
     else
-      report FAIL "入口端口池 TCP DNAT 缺失：应为 tcp dport ${start}-${end} dnat ip to ${relay_ip}"
-    fi
-    if nft_has_cloud_dnat udp "$relay_ip" "${start}-${end}"; then
-      report OK "入口端口池 UDP DNAT 正常"
-    else
-      report FAIL "入口端口池 UDP DNAT 缺失：应为 udp dport ${start}-${end} dnat ip to ${relay_ip}"
+      start="$(entry_expose_start)"
+      end="$(entry_expose_end)"
+      report OK "入口端口池：${start}-${end} -> ${relay_ip}"
+      if nft_has_cloud_dnat tcp "$relay_ip" "${start}-${end}"; then
+        report OK "入口端口池 TCP DNAT 正常"
+      else
+        report FAIL "入口端口池 TCP DNAT 缺失：应为 tcp dport ${start}-${end} dnat ip to ${relay_ip}"
+      fi
+      if nft_has_cloud_dnat udp "$relay_ip" "${start}-${end}"; then
+        report OK "入口端口池 UDP DNAT 正常"
+      else
+        report FAIL "入口端口池 UDP DNAT 缺失：应为 udp dport ${start}-${end} dnat ip to ${relay_ip}"
+      fi
     fi
   else
-    report WARN "公网入口端口池未配置，请执行 lq entry expose-range"
+    report WARN "公网入口未配置：请粘贴转发接入码（推荐），或执行 lq entry expose-range"
   fi
   [[ -f "$ENTRY_PAIRING_FILE" ]] && report OK "入口配对码：已生成"
 }
@@ -14097,6 +14320,7 @@ print_forwards_menu_options() {
   echo "8. 导入 forwards.tsv（高级）"
   echo "9. 导出 forwards.tsv"
   echo "10. 生成转发入口输出"
+  echo "11. 生成公网入口转发接入码（A 侧导入用）"
   echo "0. 返回"
   info "DDNS / 域名解析变化检测已移动到主菜单“DDNS”。"
 }
@@ -14117,6 +14341,7 @@ forwards_menu() {
       8) run_menu_action_pause import_forwards_tsv ;;
       9) run_menu_action_pause export_forwards_tsv ;;
       10) run_menu_action generate_forward_outputs ;;
+      11) run_menu_action export_forward_bundle_code ;;
       0) return 0 ;;
     esac
   done
@@ -14225,21 +14450,12 @@ print_quick_networking_steps() {
 主菜单 -> 快速组网 -> 4
 粘贴 A 生成的 ENTRY 入口码。
 
-步骤 4：公网入口配置端口池
-在 A 公网入口机执行：
-主菜单 -> 公网入口 A -> 2
-小白常用范围可以先填：
-10001-10020 -> 10.198.1.1
-
-默认范围仍可使用：
-10000-19999 -> 10.198.1.1
-
-步骤 5：如需指定 CN2 / 9929 出口，利群主机先配置 PBR
+步骤 4：如需指定 CN2 / 9929 出口，利群主机先配置 PBR（可选）
 在 B 利群主机执行：
 主菜单 -> 利群主机 B -> 3
 如果不需要 PBR，本步骤可以跳过。
 
-步骤 6：利群主机添加后端转发目标
+步骤 5：利群主机添加后端转发目标
 在 B 利群主机执行：
 主菜单 -> 快速组网 -> 5
 例如：
@@ -14248,17 +14464,30 @@ print_quick_networking_steps() {
 如果先添加了转发目标，后添加 PBR，需要重新执行：
 lq forward apply-relay --auto-fix-route
 
-步骤 7：A/B 两边执行一键诊断
+步骤 6：利群主机生成公网入口转发接入码
+在 B 利群主机执行：
+主菜单 -> 快速组网 -> 6
+复制 LEIKWAN_FORWARD_BUNDLE 接入码。
+
+步骤 7：公网入口粘贴转发接入码（推荐）
+在 A 公网入口机执行：
+主菜单 -> 快速组网 -> 7
+或 公网入口 A -> 2
+粘贴 B 生成的转发接入码，按端口逐条 DNAT，无需手填端口池。
+
+（兼容）旧版端口池：快速组网 -> 8 或 公网入口 A -> 3
+
+步骤 8：A/B 两边执行一键诊断
 A 和 B 都执行：
 主菜单 -> 状态 / 诊断 -> 3
 
-步骤 8：外部机器测试公网入口端口
+步骤 9：外部机器测试公网入口端口
 nc -vz -w 5 A_PUBLIC_IP 10001
 
 新增第二台公网入口：
 - B 进入“快速组网”，生成公网入口接入码，脚本会自动推荐新的 EasyTier IP 和监听端口。
 - 新 A 进入“快速组网”，粘贴接入码并部署入口。
-- 新 A 执行“公网入口 A -> 配置入口端口池”。
+- 新 A 执行“粘贴转发接入码”（或兼容：配置入口端口池）。
 - B 回到“快速组网”，粘贴 A 返回码完成接入。
 - B 执行 利群主机 -> 公网入口列表管理 查看 / 测试。
 
@@ -14290,8 +14519,12 @@ quick_networking_menu() {
     echo "3. A：粘贴接入码并部署入口"
     echo "4. B：粘贴入口返回码完成接入"
     echo "5. B：添加后端转发目标"
-    echo "6. B：生成转发端点输出"
+    echo "6. B：生成公网入口转发接入码"
+    echo "7. A：粘贴转发接入码并应用（推荐）"
+    echo "8. A：配置入口端口池（兼容）"
+    echo "9. B：生成转发端点输出"
     echo "0. 返回"
+    info "B 配好转发后第 6 项生成接入码，A 第 7 项粘贴即生效，无需手填端口池。"
     choice="$(prompt_menu_choice "请选择：")"
     case "$choice" in
       1) init_relay_wizard ;;
@@ -14299,7 +14532,10 @@ quick_networking_menu() {
       3) run_menu_action quick_deploy_entry_from_network_pairing || warn_and_pause "公网入口部署未完成，请查看上方提示后重试。" ;;
       4) run_menu_action quick_deploy_relay_from_entry_pairing || warn_and_pause "利群主机接入未完成，请查看上方提示后重试。" ;;
       5) run_menu_action add_forward || warn_and_pause "后端转发目标添加未完成，请查看上方提示后重试。" ;;
-      6) run_menu_action_pause generate_forward_outputs ;;
+      6) run_menu_action export_forward_bundle_code || warn_and_pause "生成公网入口转发接入码未完成，请查看上方提示后重试。" ;;
+      7) run_menu_action import_forward_code || warn_and_pause "粘贴转发接入码未完成，请查看上方提示后重试。" ;;
+      8) run_menu_action entry_expose_range || warn_and_pause "公网入口端口池配置未完成，请查看上方提示后重试。" ;;
+      9) run_menu_action_pause generate_forward_outputs ;;
       0) return 0 ;;
       "") menu_input_required ;;
       *) menu_invalid_choice ;;
@@ -14652,17 +14888,19 @@ entry_host_menu() {
   ensure_role_or_warn cloud-entry || return 0
   while true; do
     print_menu_header "公网入口 A"
-    echo "1. 粘贴接入码并部署入口"
-    echo "2. 配置入口端口池"
-    echo "3. 查看 A 端状态"
-    echo "4. DDNS / 域名解析变化"
+    echo "1. 粘贴组网接入码并部署入口"
+    echo "2. 粘贴转发接入码并应用（推荐）"
+    echo "3. 配置入口端口池（兼容）"
+    echo "4. 查看 A 端状态"
+    echo "5. DDNS / 域名解析变化"
     echo "0. 返回"
     choice="$(prompt_menu_choice "请选择：")"
     case "$choice" in
       1) run_menu_action quick_deploy_entry_from_network_pairing ;;
-      2) run_menu_action_pause entry_expose_range ;;
-      3) run_menu_action_pause status_lts ;;
-      4) ddns_menu ;;
+      2) run_menu_action_pause import_forward_code ;;
+      3) run_menu_action_pause entry_expose_range ;;
+      4) run_menu_action_pause status_lts ;;
+      5) ddns_menu ;;
       0) return 0 ;;
       "") menu_input_required ;;
       *) menu_invalid_choice ;;
@@ -14867,7 +15105,8 @@ main() {
         edit) edit_forward "${3:-}" ;;
         delete) delete_forward "${3:-}" ;;
         export) export_forward_code_by_name "${3:-}" ;;
-        import) warn "forward import 已降级为高级兼容；默认请在 A 执行 lq entry expose-range，一次性配置入口端口池。"; import_forward_code "${3:-}" ;;
+        bundle-export|bundle) export_forward_bundle_code ;;
+        import) import_forward_code "${3:-}" ;;
         list) list_forwards ;;
         apply-relay)
           if [[ "${3:-}" == "--auto-fix-route" ]]; then
@@ -14882,6 +15121,7 @@ main() {
     entry)
       case "${2:-}" in
         expose-range) shift 2; entry_expose_range "$@" ;;
+        import) import_forward_code "${3:-}" ;;
         ddns)
           case "${3:-}" in
             status) run_cli_action entry_ddns_status ;;
