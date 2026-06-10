@@ -116,4 +116,52 @@ grep -q 'forward bundle-export' <(bash leikwan-toolkit.sh --help) || {
   exit 1
 }
 
+printf '%s\n' 'ENTRY_MODE=bundle' 'RELAY_ET_IP=10.198.1.1' 'ENABLED=true' >"$ENTRY_EXPOSE_ENV"
+bundle_warn_out="$(warn_if_forward_port_outside_expose 25000 2>&1)"
+grep -q '转发接入码模式' <<<"$bundle_warn_out" || {
+  echo "FAIL: bundle mode warn_if_forward_port_outside_expose should skip port pool check" >&2
+  echo "$bundle_warn_out" >&2
+  exit 1
+}
+grep -q '不在入口端口池' <<<"$bundle_warn_out" && {
+  echo "FAIL: bundle mode should not warn about port pool range" >&2
+  echo "$bundle_warn_out" >&2
+  exit 1
+}
+
+bad_rules=$'evil\t25000\t10.0.0.1\t443\ttrue\tok\ninjected\t10003\tbad\thost\t8443\ttrue\tnote'
+bad_b64="$(printf '%s\n' "$bad_rules" | base64 | tr -d '\n')"
+{
+  echo "-----BEGIN LEIKWAN FORWARD BUNDLE-----"
+  printf 'FORWARD_BUNDLE_VERSION=0.5\nRELAY_ET_IP=10.198.1.1\nRULE_COUNT=2\nRULES_B64=%s\n' "$bad_b64"
+  echo "-----END LEIKWAN FORWARD BUNDLE-----"
+} >"$bundle_raw"
+set +e
+printf 'y\n' | import_forward_bundle_apply "$bundle_raw" >/dev/null 2>&1
+bad_import_rc=$?
+set -e
+(( bad_import_rc != 0 )) || {
+  echo "FAIL: bundle import with TAB-injected target_host should be rejected" >&2
+  exit 1
+}
+
+tab_comment_rules=$'svc3\t10003\t198.51.100.30\t443\ttrue\tbad'"$'\t'"'injected'
+tab_b64="$(printf '%s\n' "$tab_comment_rules" | base64 | tr -d '\n')"
+{
+  echo "-----BEGIN LEIKWAN FORWARD BUNDLE-----"
+  printf 'FORWARD_BUNDLE_VERSION=0.5\nRELAY_ET_IP=10.198.1.1\nRULE_COUNT=1\nRULES_B64=%s\n' "$tab_b64"
+  echo "-----END LEIKWAN FORWARD BUNDLE-----"
+} >"$bundle_raw"
+rm -f "${TMP_DIR}/nft-applied"
+printf 'y\n' | import_forward_bundle_apply "$bundle_raw" >/dev/null
+grep -q 'svc3' "$FORWARDS_TSV" || {
+  echo "FAIL: sanitized comment import missing svc3" >&2
+  exit 1
+}
+grep -Fq $'bad\tinjected' "$FORWARDS_TSV" && {
+  echo "FAIL: comment TAB injection was not sanitized in forwards.tsv" >&2
+  cat "$FORWARDS_TSV" >&2
+  exit 1
+}
+
 echo "[OK] forward bundle regression passed"

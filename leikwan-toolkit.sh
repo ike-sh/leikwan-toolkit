@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-TOOL_VERSION="1.4.19"
+TOOL_VERSION="1.4.20"
 RELEASE_CHANNEL="LTS"
 PROJECT_NAME="leikwan-toolkit"
 PROJECT_TITLE="利群快速组网工具"
@@ -684,6 +684,25 @@ prompt_host() {
     [[ -n "$value" && ! "$value" =~ [[:space:]/] ]] && printf '%s' "$value" && return 0
     echo "请输入 IP 或域名，不要包含协议、端口或空格。"
   done
+}
+
+sanitize_tsv_comment() {
+  local value="$1"
+  value="$(normalize_menu_choice "$value")"
+  value="${value//$'\t'/ }"
+  value="${value//$'\n'/ }"
+  value="${value//$'\r'/ }"
+  printf '%s' "$value"
+}
+
+validate_forward_target_host() {
+  local host="$1" label="${2:-target_host}"
+  host="$(normalize_menu_choice "$host")"
+  [[ -n "$host" && ! "$host" =~ [[:space:]/] ]] || {
+    fail "接入码含非法 ${label}：${host}（不能含空格、TAB 或 /）"
+    return 1
+  }
+  printf '%s' "$host"
 }
 
 safe_name() {
@@ -6004,8 +6023,10 @@ import_forward_bundle_apply() {
     [[ -n "$name" ]] || continue
     name="$(safe_name "$name")"
     is_port "$entry_port" || { fail "接入码含非法 entry_port：${entry_port}"; return 1; }
+    target_host="$(validate_forward_target_host "$target_host")" || return 1
     is_port "$target_port" || { fail "接入码含非法 target_port：${target_port}"; return 1; }
     [[ "$enabled" == "true" || "$enabled" == "false" ]] || enabled="true"
+    comment="$(sanitize_tsv_comment "$comment")"
     body="${body}"$'\n'"${name}"$'\t'"${entry_port}"$'\t'"${target_host}"$'\t'"${target_port}"$'\t\t\t'"${enabled}"$'\t'"${comment}"
     n=$((n + 1))
     [[ "$enabled" == "true" ]] && summary="${summary}  ${name}: 端口 ${entry_port} → relay ${relay_ip}:${entry_port}（后端 ${target_host}:${target_port}）"$'\n'
@@ -6198,10 +6219,10 @@ import_forward_single_apply() {
   [[ "$(env_file_get "$tmp" FORWARD_VERSION)" == "0.4" ]] || { fail "FORWARD_VERSION 不支持。"; rm -f "$tmp"; return 1; }
   name="$(safe_name "$(env_file_get "$tmp" NAME)")"
   entry_port="$(env_file_get "$tmp" ENTRY_PORT)"
-  target_host="$(env_file_get "$tmp" TARGET_HOST)"
+  target_host="$(validate_forward_target_host "$(env_file_get "$tmp" TARGET_HOST)")" || { rm -f "$tmp"; return 1; }
   target_port="$(env_file_get "$tmp" TARGET_PORT)"
   enabled="$(env_file_get "$tmp" ENABLED)"
-  comment="$(env_file_get "$tmp" COMMENT)"
+  comment="$(sanitize_tsv_comment "$(env_file_get "$tmp" COMMENT)")"
   is_port "$entry_port" || { fail "ENTRY_PORT 非法：${entry_port}"; rm -f "$tmp"; return 1; }
   is_port "$target_port" || { fail "TARGET_PORT 非法：${target_port}"; rm -f "$tmp"; return 1; }
   [[ "$enabled" == "true" || "$enabled" == "false" ]] || { fail "ENABLED 必须是 true 或 false。"; rm -f "$tmp"; return 1; }
@@ -8808,8 +8829,13 @@ port_in_range() {
 }
 
 warn_if_forward_port_outside_expose() {
-  local port="$1" start end
+  local port="$1" start end mode
   if [[ -f "$ENTRY_EXPOSE_ENV" ]]; then
+    mode="$(env_file_get "$ENTRY_EXPOSE_ENV" ENTRY_MODE)"
+    if [[ "$mode" == "bundle" ]]; then
+      info "公网入口为转发接入码模式，entry_port ${port} 将逐条 DNAT（无需端口池范围校验）。"
+      return 0
+    fi
     start="$(entry_expose_start)"
     end="$(entry_expose_end)"
     if port_in_range "$port" "$start" "$end"; then
