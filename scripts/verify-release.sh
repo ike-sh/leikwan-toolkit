@@ -59,6 +59,9 @@ bash tests/forward-route-table-sync-regression.sh
 section "forward domain resolution regression"
 bash tests/forward-domain-resolution-regression.sh
 
+section "forward bundle regression"
+bash tests/forward-bundle-regression.sh
+
 section "domain PBR message regression"
 bash tests/domain-pbr-message-regression.sh
 

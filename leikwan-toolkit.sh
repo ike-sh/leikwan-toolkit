@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-TOOL_VERSION="1.4.18"
+TOOL_VERSION="1.4.19"
 RELEASE_CHANNEL="LTS"
 PROJECT_NAME="leikwan-toolkit"
 PROJECT_TITLE="利群快速组网工具"
@@ -5946,6 +5946,18 @@ RULES_B64=${b64}" 600
   show_pairing_code_and_confirm "公网入口转发接入码（聚合 ${count} 条）" "-----BEGIN LEIKWAN FORWARD BUNDLE-----" "-----END LEIKWAN FORWARD BUNDLE-----" "$file" "LEIKWAN_FORWARD_BUNDLE_BASE64" "在 A 公网入口机选择「粘贴转发接入码并应用」。"
 }
 
+confirm_forward_bundle_relay_ip() {
+  local bundle_relay="$1" expected=""
+  expected="$(current_relay_et_ip)"
+  [[ -n "$bundle_relay" && -n "$expected" ]] || return 0
+  is_ipv4 "$expected" || return 0
+  [[ "$bundle_relay" == "$expected" ]] && return 0
+  warn "接入码 Relay EasyTier IP：${bundle_relay}"
+  warn "本地组网 Relay EasyTier IP：${expected}"
+  warn "二者不一致时，流量可能被转发到错误的利群主机。"
+  prompt_yes_no "仍要继续导入？" "N" || return 1
+}
+
 parse_forward_bundle_raw() {
   local raw="$1" dest="$2" line payload
   : >"$dest"
@@ -5984,6 +5996,7 @@ import_forward_bundle_apply() {
   rules_b64="$(env_file_get "$tmp" RULES_B64)"
   rm -f "$tmp"
   is_ipv4 "$relay_ip" || { fail "接入码 RELAY_ET_IP 非法：${relay_ip}"; return 1; }
+  confirm_forward_bundle_relay_ip "$relay_ip" || return 1
   rules="$(printf '%s' "$rules_b64" | base64 -d 2>/dev/null)" || { fail "RULES_B64 解码失败，请重新复制接入码。"; return 1; }
   [[ -n "$rules" ]] || { fail "接入码不含转发规则。"; return 1; }
   body="$(printf '# name\tentry_port\ttarget_host\ttarget_port\tout_iface\troute_table\tenabled\tcomment')"
