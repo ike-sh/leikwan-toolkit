@@ -164,4 +164,87 @@ grep -Fq $'bad\tinjected' "$FORWARDS_TSV" && {
   exit 1
 }
 
+rm -f "$ENTRY_EXPOSE_ENV"
+printf '%s\n' 'ROLE=leikwan-relay' 'RELAY_ET_IP=10.198.1.1' >"$NETWORK_ENV"
+relay_warn_out="$(warn_if_forward_port_outside_expose 25000 2>&1)"
+grep -q '利群主机侧' <<<"$relay_warn_out" || {
+  echo "FAIL: relay role should skip default port pool warning" >&2
+  echo "$relay_warn_out" >&2
+  exit 1
+}
+grep -q '不在默认推荐范围' <<<"$relay_warn_out" && {
+  echo "FAIL: relay role should not warn about default port pool" >&2
+  echo "$relay_warn_out" >&2
+  exit 1
+}
+
+dup_rules=$'dup-a\t10005\t198.51.100.40\t443\ttrue\tone\ndup-b\t10005\t198.51.100.41\t8443\ttrue\ttwo'
+dup_b64="$(printf '%s\n' "$dup_rules" | base64 | tr -d '\n')"
+{
+  echo "-----BEGIN LEIKWAN FORWARD BUNDLE-----"
+  printf 'FORWARD_BUNDLE_VERSION=0.5\nRELAY_ET_IP=10.198.1.1\nRULE_COUNT=2\nRULES_B64=%s\n' "$dup_b64"
+  echo "-----END LEIKWAN FORWARD BUNDLE-----"
+} >"$bundle_raw"
+set +e
+printf 'y\n' | import_forward_bundle_apply "$bundle_raw" >/dev/null 2>&1
+dup_rc=$?
+set -e
+(( dup_rc != 0 )) || {
+  echo "FAIL: duplicate entry_port bundle import should be rejected" >&2
+  exit 1
+}
+
+bad_enabled_rules=$'svc4\t10004\t198.51.100.50\t443\tmaybe\tnote'
+bad_enabled_b64="$(printf '%s\n' "$bad_enabled_rules" | base64 | tr -d '\n')"
+{
+  echo "-----BEGIN LEIKWAN FORWARD BUNDLE-----"
+  printf 'FORWARD_BUNDLE_VERSION=0.5\nRELAY_ET_IP=10.198.1.1\nRULE_COUNT=1\nRULES_B64=%s\n' "$bad_enabled_b64"
+  echo "-----END LEIKWAN FORWARD BUNDLE-----"
+} >"$bundle_raw"
+set +e
+printf 'y\n' | import_forward_bundle_apply "$bundle_raw" >/dev/null 2>&1
+bad_enabled_rc=$?
+set -e
+(( bad_enabled_rc != 0 )) || {
+  echo "FAIL: invalid enabled value should be rejected" >&2
+  exit 1
+}
+
+{
+  echo "-----BEGIN LEIKWAN FORWARD BUNDLE-----"
+  printf 'FORWARD_BUNDLE_VERSION=0.5\nRELAY_ET_IP=10.198.1.1\nRULE_COUNT=9\nRULES_B64=%s\n' "$bundle_b64"
+  echo "-----END LEIKWAN FORWARD BUNDLE-----"
+} >"$bundle_raw"
+set +e
+printf 'y\n' | import_forward_bundle_apply "$bundle_raw" >/dev/null 2>&1
+count_rc=$?
+set -e
+(( count_rc != 0 )) || {
+  echo "FAIL: RULE_COUNT mismatch should be rejected" >&2
+  exit 1
+}
+
+printf '%s\n' 'ROLE=cloud-entry' >"$NETWORK_ENV"
+set +e
+printf 'n\n' | import_forward_bundle_apply "$bundle_raw" >/dev/null 2>&1
+no_relay_rc=$?
+set -e
+(( no_relay_rc != 0 )) || {
+  echo "FAIL: import without local relay IP should abort when user declines" >&2
+  exit 1
+}
+printf '%s\n' 'ROLE=cloud-entry' 'EASYTIER_RELAY_ET_IP=10.198.1.1' >"$NETWORK_ENV"
+
+printf '%s\n' 'ENTRY_MODE=bundle' 'RELAY_ET_IP=10.198.1.1' 'ENABLED=true' >"$ENTRY_EXPOSE_ENV"
+printf 'n\n' | entry_expose_range --range 10000-19999 --relay-ip 10.198.1.1 --no-apply >/dev/null 2>&1
+[[ "$(env_file_get "$ENTRY_EXPOSE_ENV" ENTRY_MODE)" == "bundle" ]] || {
+  echo "FAIL: declined port pool switch should keep bundle expose.env" >&2
+  exit 1
+}
+grep -q 'ENTRY_EXPOSE_START' "$ENTRY_EXPOSE_ENV" && {
+  echo "FAIL: declined port pool switch should not write port pool fields" >&2
+  cat "$ENTRY_EXPOSE_ENV" >&2
+  exit 1
+}
+
 echo "[OK] forward bundle regression passed"

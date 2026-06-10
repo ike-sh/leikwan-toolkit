@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-TOOL_VERSION="1.4.20"
+TOOL_VERSION="1.4.21"
 RELEASE_CHANNEL="LTS"
 PROJECT_NAME="leikwan-toolkit"
 PROJECT_TITLE="利群快速组网工具"
@@ -5967,8 +5967,16 @@ RULES_B64=${b64}" 600
 
 confirm_forward_bundle_relay_ip() {
   local bundle_relay="$1" expected=""
-  expected="$(current_relay_et_ip)"
-  [[ -n "$bundle_relay" && -n "$expected" ]] || return 0
+  [[ -n "$bundle_relay" ]] || return 0
+  expected="$(env_file_get "$NETWORK_ENV" RELAY_ET_IP)"
+  [[ -n "$expected" ]] || expected="$(env_file_get "$NETWORK_ENV" EASYTIER_RELAY_ET_IP)"
+  if [[ -z "$expected" ]]; then
+    warn "未读取到本地组网 Relay EasyTier IP（请先完成快速组网步骤 3）。"
+    warn "接入码 Relay EasyTier IP：${bundle_relay}"
+    warn "将直接使用接入码中的 Relay IP 配置 DNAT。"
+    prompt_yes_no "仍要继续导入？" "N" || return 1
+    return 0
+  fi
   is_ipv4 "$expected" || return 0
   [[ "$bundle_relay" == "$expected" ]] && return 0
   warn "接入码 Relay EasyTier IP：${bundle_relay}"
@@ -6005,14 +6013,16 @@ parse_forward_bundle_raw() {
 
 import_forward_bundle_apply() {
   need_root_unless_dry_run
-  local raw="$1" tmp relay_ip rules_b64 rules public_host
+  local raw="$1" tmp relay_ip rules_b64 rules public_host declared_count
   local body name entry_port target_host target_port enabled comment n=0 summary=""
+  local -A seen_ports=() seen_names=()
   tmp="$(mktemp)"
   parse_forward_bundle_raw "$raw" "$tmp" || { rm -f "$tmp"; return 1; }
   require_env_fields "$tmp" FORWARD_BUNDLE_VERSION RELAY_ET_IP RULES_B64 || { rm -f "$tmp"; return 1; }
   [[ "$(env_file_get "$tmp" FORWARD_BUNDLE_VERSION)" == "0.5" ]] || { fail "FORWARD_BUNDLE_VERSION 不支持。"; rm -f "$tmp"; return 1; }
   relay_ip="$(env_file_get "$tmp" RELAY_ET_IP)"
   rules_b64="$(env_file_get "$tmp" RULES_B64)"
+  declared_count="$(env_file_get "$tmp" RULE_COUNT)"
   rm -f "$tmp"
   is_ipv4 "$relay_ip" || { fail "接入码 RELAY_ET_IP 非法：${relay_ip}"; return 1; }
   confirm_forward_bundle_relay_ip "$relay_ip" || return 1
@@ -6023,15 +6033,23 @@ import_forward_bundle_apply() {
     [[ -n "$name" ]] || continue
     name="$(safe_name "$name")"
     is_port "$entry_port" || { fail "接入码含非法 entry_port：${entry_port}"; return 1; }
+    [[ -n "${seen_ports[$entry_port]:-}" ]] && { fail "接入码含重复 entry_port：${entry_port}"; return 1; }
+    [[ -n "${seen_names[$name]:-}" ]] && { fail "接入码含重复转发名称：${name}"; return 1; }
+    seen_ports[$entry_port]=1
+    seen_names[$name]=1
     target_host="$(validate_forward_target_host "$target_host")" || return 1
     is_port "$target_port" || { fail "接入码含非法 target_port：${target_port}"; return 1; }
-    [[ "$enabled" == "true" || "$enabled" == "false" ]] || enabled="true"
+    [[ "$enabled" == "true" || "$enabled" == "false" ]] || { fail "接入码含非法 enabled：${enabled}（必须为 true 或 false）"; return 1; }
     comment="$(sanitize_tsv_comment "$comment")"
     body="${body}"$'\n'"${name}"$'\t'"${entry_port}"$'\t'"${target_host}"$'\t'"${target_port}"$'\t\t\t'"${enabled}"$'\t'"${comment}"
     n=$((n + 1))
     [[ "$enabled" == "true" ]] && summary="${summary}  ${name}: 端口 ${entry_port} → relay ${relay_ip}:${entry_port}（后端 ${target_host}:${target_port}）"$'\n'
   done <<<"$rules"
   (( n > 0 )) || { fail "接入码不含有效转发规则。"; return 1; }
+  if [[ -n "$declared_count" ]] && [[ "$declared_count" =~ ^[0-9]+$ ]] && (( declared_count != n )); then
+    fail "接入码 RULE_COUNT=${declared_count} 与实际规则数 ${n} 不一致。"
+    return 1
+  fi
   confirm_summary "导入公网入口转发接入码" "Relay EasyTier IP=${relay_ip}\n规则数=${n}\n${summary}动作：用接入码规则【替换】本机转发表，并按端口逐条 DNAT 到 Relay（无需再配端口池）。" || return 0
   ensure_tsv_files
   write_file "$FORWARDS_TSV" "$body" 600
@@ -8843,6 +8861,8 @@ warn_if_forward_port_outside_expose() {
     else
       warn "entry_port ${port} 不在入口端口池 ${start}-${end} 内，公网入口可能无法访问。"
     fi
+  elif [[ "$(env_file_get "$NETWORK_ENV" ROLE)" == "leikwan-relay" ]]; then
+    info "利群主机侧：entry_port ${port} 将由 A 公网入口按转发接入码逐条暴露（无需端口池范围校验）。"
   else
     info "未读取到 A 入口端口池范围；将仅校验常见端口池 ${FORWARD_ENTRY_PORT_FALLBACK_START}-${FORWARD_ENTRY_PORT_FALLBACK_END}。"
     if port_in_range "$port" "$FORWARD_ENTRY_PORT_FALLBACK_START" "$FORWARD_ENTRY_PORT_FALLBACK_END"; then
@@ -8935,6 +8955,11 @@ entry_expose_range() {
   fi
   is_ipv4 "${relay_ip:-$RELAY_ET_IP}" || { fail "Relay EasyTier IP 非法：${relay_ip:-$RELAY_ET_IP}"; return 1; }
   relay_ip="${relay_ip:-$RELAY_ET_IP}"
+  if [[ -f "$ENTRY_EXPOSE_ENV" ]] && [[ "$(env_file_get "$ENTRY_EXPOSE_ENV" ENTRY_MODE)" == "bundle" ]]; then
+    warn "当前为转发接入码（bundle）模式；配置端口池将覆盖 bundle 暴露方式。"
+    warn "本机 forwards.tsv 不会自动清理，请确认与端口池策略一致。"
+    prompt_yes_no "是否继续改为端口池模式？" "N" || return 0
+  fi
   confirm_summary "配置公网入口端口池摘要" "ENTRY_EXPOSE_START=${start}\nENTRY_EXPOSE_END=${end}\nRELAY_ET_IP=${relay_ip}\n动作：A 侧把该端口池 TCP+UDP DNAT 到 Relay EasyTier IP，保持原端口不变。" || return 0
   write_file "$ENTRY_EXPOSE_ENV" "ENTRY_EXPOSE_START=${start}
 ENTRY_EXPOSE_END=${end}

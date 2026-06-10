@@ -1,6 +1,8 @@
 # Leikwan Toolkit
 
-Leikwan Toolkit `1.4.20 LTS` is the Shell LTS line for local TCP/UDP forwarding, EasyTier relay / entry setup, nftables, IPv4 PBR, snapshots, status, doctor, and DDNS domain-resolution refresh.
+Leikwan Toolkit `1.4.21 LTS` is the Shell LTS line for local TCP/UDP forwarding, EasyTier relay / entry setup, nftables, IPv4 PBR, snapshots, status, doctor, and DDNS domain-resolution refresh.
+
+**v1.4.21**：bundle 导入拒绝重复端口/名称、非法 `enabled` 与 `RULE_COUNT` 不一致；Relay IP 校验不再误用脚本默认 IP；利群主机侧跳过端口池误报；bundle→端口池切换需确认。
 
 **v1.4.20**：bundle 模式下 `warn_if_forward_port_outside_expose` 不再误用默认端口池；接入码导入时校验/消毒 `target_host` 与 `comment`（防 TAB 注入）。
 
@@ -51,7 +53,7 @@ lq forward apply-relay --auto-fix-route
 
 ```bash
 lq --version
-# leikwan-toolkit 1.4.20 LTS
+# leikwan-toolkit 1.4.21 LTS
 ```
 
 ## 快速组网系统网络预处理
